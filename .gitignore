@@ -1,0 +1,14 @@
+.aider*
+.env
+.venv/**
+.vscode/**
+__pycache__/**
+
+offload_adam.egg-info/**
+
+build/**
+dist/**
+data/**
+
+*.so
+a.out
