@@ -2,10 +2,9 @@ from typing import Any, Callable, Iterable, Optional
 
 import torch
 import torch.optim.optimizer
-from torch.optim import Adam
 from torch.optim.optimizer import ParamsT, StateDict
 
-import offload_adam
+import cpu_optimizer_bindings
 
 
 class CPUAdam(torch.optim.Optimizer):
@@ -29,7 +28,7 @@ class CPUAdam(torch.optim.Optimizer):
 
         for group in self.param_groups:
             for param in group["params"]:
-                self.state[param] = offload_adam.create_optimizer(
+                self.state[param] = cpu_optimizer_bindings.create_optimizer(
                     param, lr, betas[0], betas[1], eps
                 )
                 if pipeline_hook:
@@ -47,17 +46,17 @@ class CPUAdam(torch.optim.Optimizer):
     def step_param(self, param: torch.Tensor) -> None:
         """Perform an optimizer step on one parameter. This is done with whatever SIMD is available."""
         param_opt = self.state.get(param)
-        if type(param_opt) is not offload_adam.AdamOptimizer:
+        if type(param_opt) is not cpu_optimizer_bindings.AdamOptimizer:
             raise ValueError(
                 f"Parameter is not registered with this optimizer: {param}"
             )
-        offload_adam.step(param_opt, param.data, param.grad)
+        cpu_optimizer_bindings.step(param_opt, param.data, param.grad)
 
     def __del__(self):
         """Free the memory held by C++. Otherwise we risk leaking unholy amounts of memory."""
         for opt in self.state.values():
-            if isinstance(opt, offload_adam.AdamOptimizer):
-                offload_adam.destroy_optimizer(opt)
+            if isinstance(opt, cpu_optimizer_bindings.AdamOptimizer):
+                cpu_optimizer_bindings.destroy_optimizer(opt)
 
     def load_state_dict(self, state_dict: StateDict) -> None:
         """Deserialize with torch.load()."""
@@ -65,7 +64,7 @@ class CPUAdam(torch.optim.Optimizer):
 
         # Restore optimizer state bindings
         for param, _bytes in self.state.items():
-            opt = offload_adam.deserialize(_bytes)
+            opt = cpu_optimizer_bindings.deserialize(_bytes)
             self.state[param] = opt
             [setattr(opt, k, v) for k, v in self.defaults.items() if k in opt.__dir__()]
 
@@ -75,11 +74,11 @@ class CPUAdam(torch.optim.Optimizer):
 
         # Convert optimizer state bindings to bytes objects
         for param, opt in state["state"].items():
-            state["state"][param] = offload_adam.serialize(opt)
+            state["state"][param] = cpu_optimizer_bindings.serialize(opt)
 
         return state
 
     @classmethod
     def vector_width(cls) -> int:
         """Returns 1 if using the naive scalar implementation, 256 for avx2, 512 for avx512."""
-        return offload_adam.vector_width()
+        return cpu_optimizer_bindings.vector_width()

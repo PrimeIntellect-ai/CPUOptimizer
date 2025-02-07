@@ -8,6 +8,8 @@ from cpu_adam import CPUAdam
 from torch.optim import Adam
 import math
 
+# pip install numpy torch scikit-learn
+
 class SimpleNet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -100,8 +102,8 @@ def main():
     print()
     print("Max diff:", max_diff)
 
-    torch.save(model_cpu.state_dict(), "cpu_model.pth")
-    model_cpu_state_dict = torch.load("cpu_model.pth")
+    torch.save(model_cpu.state_dict(), "/tmp/cpu_model.pth")
+    model_cpu_state_dict = torch.load("/tmp/cpu_model.pth")
 
 if __name__ == '__main__':
     main()

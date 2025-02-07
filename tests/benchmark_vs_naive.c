@@ -1,4 +1,4 @@
-#include "offload_adam.h"
+#include "../offload_adam.h"
 
 // gcc benchmark_vs_naive.c -lm -O3 -march=native -fno-math-errno
 
