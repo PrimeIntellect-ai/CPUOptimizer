@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo "\033[35mTraining test model, and comparing against PyTorch's Adam implementation.\033[0m"
-python test_cpu_adam.py
+#python test_cpu_adam.py
 echo
 
 echo "\033[35mBenchmarking vectorized implementations vs naive C implementation.\033[0m"

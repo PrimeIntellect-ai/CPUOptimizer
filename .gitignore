@@ -3,6 +3,7 @@
 .venv/**
 .vscode/**
 __pycache__/**
+CPUOptimizer/__pycache__/**
 
 *.egg-info/**
 

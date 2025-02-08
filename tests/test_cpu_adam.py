@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from sklearn.datasets import load_digits
 from sklearn.preprocessing import StandardScaler
-from cpu_adam import CPUAdam
+from CPUOptimizer.cpu_adam import CPUAdam
 from torch.optim import Adam
 import math
 
