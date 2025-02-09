@@ -4,13 +4,13 @@
 // Must install ninja to build this extension
 // Also install torch and numpy
 
-AdamOptimizer* create_optimizer(torch::Tensor& grad, float lr, float beta1, float beta2, float epsilon) {
+AdamOptimizer* create_optimizer(torch::Tensor& grad, float lr, float beta1, float beta2, float epsilon, float weight_decay) {
     TORCH_CHECK(grad.defined(), "grad tensor must not be null");
     TORCH_CHECK(grad.is_contiguous(), "grad must be contiguous");
     TORCH_CHECK(grad.dtype() == torch::kFloat32, "grad must be float32");
     TORCH_CHECK(grad.numel() > 0, "grad tensor must not be empty");
     int64_t param_count = grad.numel();
-    AdamOptimizer* opt = adam_init(param_count, lr, beta1, beta2, epsilon);
+    AdamOptimizer* opt = adam_init(param_count, lr, beta1, beta2, epsilon, weight_decay);
     TORCH_CHECK(opt != nullptr, "Failed to allocate optimizer");
     return opt;
 }
