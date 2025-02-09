@@ -10,26 +10,25 @@ import CPUOptimizer.bindings as bindings
 class CPUAdam(torch.optim.Optimizer):
     """
     A CPU-optimized implementation of the Adam optimizer.
-
-    When 
     """
 
     def __init__(
         self,
         params: ParamsT,
-        lr: float = 1e-3,
+        lr: float = 0.001,
         betas: tuple[float, float] = (0.9, 0.999),
-        eps=1e-8,
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
         pipeline_hook: Callable | None = None,
     ):
         super().__init__(
-            params, defaults=dict(lr=lr, beta1=betas[0], beta2=betas[1], eps=eps, pipeline_hook=pipeline_hook)
+            params, defaults=dict(lr=lr, beta1=betas[0], beta2=betas[1], eps=eps, weight_decay=weight_decay, pipeline_hook=pipeline_hook)
         )
 
         for group in self.param_groups:
             for param in group["params"]:
                 self.state[param] = bindings.create_optimizer(
-                    param, lr, betas[0], betas[1], eps
+                    param, lr, betas[0], betas[1], eps, weight_decay,
                 )
                 if pipeline_hook:
                     param.register_post_accumulate_grad_hook(pipeline_hook)

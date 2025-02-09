@@ -22,7 +22,8 @@ static double test_impl(void step_fn(AdamOptimizer* optimizer, float* volatile p
     float beta1 = 0.9f;
     float beta2 = 0.999f;
     float epsilon = 1e-8f;
-    AdamOptimizer* optimizer = adam_init(PARAM_COUNT, learning_rate, beta1, beta2, epsilon);
+    float weight_decay = 0.0f;
+    AdamOptimizer* optimizer = adam_init(PARAM_COUNT, learning_rate, beta1, beta2, epsilon, weight_decay);
     
     // Time the optimization steps
     struct timespec start, end;
