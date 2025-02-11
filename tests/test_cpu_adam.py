@@ -97,7 +97,7 @@ def main():
                 param_torch.data.copy_(param_cpu.data)
 
             # Print epoch progress
-            print(f'\rEpoch: {epoch} [{sample_number}/{len(dataset)}] ', end="")
+            print(f'\rEpoch: {epoch} [{sample_number}/{len(dataset)}] Loss: {loss_cpu.item():.4f}', end="")
         print()
     print()
     print("Max diff:", max_diff)
