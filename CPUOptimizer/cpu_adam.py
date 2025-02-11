@@ -37,8 +37,9 @@ class CPUAdam(torch.optim.Optimizer):
 
         for group in self.param_groups:
             for param in group["params"]:
+                _param = param._local_tensor if isinstance(param, DTensor) else param
                 self.state[param] = bindings.create_optimizer(
-                    param, lr, betas[0], betas[1], eps, weight_decay, clip_max_norm,
+                    _param, lr, betas[0], betas[1], eps, weight_decay, clip_max_norm,
                 )
                 if pipeline_hook:
                     param.register_post_accumulate_grad_hook(pipeline_hook)
@@ -62,7 +63,7 @@ class CPUAdam(torch.optim.Optimizer):
             )
         
         if isinstance(param, DTensor):
-            bindings.step(param_opt, param.to_local(), param.grad.to_local())
+            bindings.step(param_opt, param._local_tensor, param.grad._local_tensor)
         else:
             bindings.step(param_opt, param.data, param.grad)
 
