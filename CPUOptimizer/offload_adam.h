@@ -8,10 +8,8 @@
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
-#define MAX_NORM_ONE 1
-
 #if __cplusplus
-#define restrict __restrict__
+#define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
 #endif
 
 typedef struct {
