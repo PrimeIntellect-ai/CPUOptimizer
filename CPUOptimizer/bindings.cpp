@@ -4,13 +4,13 @@
 // Must install ninja to build this extension
 // Also install torch and numpy
 
-AdamOptimizer* create_optimizer(torch::Tensor& grad, float lr, float beta1, float beta2, float epsilon, float weight_decay) {
+AdamOptimizer* create_optimizer(torch::Tensor& grad, float lr, float beta1, float beta2, float epsilon, float weight_decay, float clip_max_norm) {
     TORCH_CHECK(grad.defined(), "grad tensor must not be null");
     TORCH_CHECK(grad.is_contiguous(), "grad must be contiguous");
     TORCH_CHECK(grad.dtype() == torch::kFloat32, "grad must be float32");
     TORCH_CHECK(grad.numel() > 0, "grad tensor must not be empty");
     int64_t param_count = grad.numel();
-    AdamOptimizer* opt = adam_init(param_count, lr, beta1, beta2, epsilon, weight_decay);
+    AdamOptimizer* opt = adam_init(param_count, lr, beta1, beta2, epsilon, weight_decay, clip_max_norm);
     TORCH_CHECK(opt != nullptr, "Failed to allocate optimizer");
     return opt;
 }
@@ -94,6 +94,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("beta1", &AdamOptimizer::beta1)
         .def_readwrite("beta2", &AdamOptimizer::beta2)
         .def_readwrite("eps", &AdamOptimizer::eps)
+        .def_readwrite("weight_decay", &AdamOptimizer::weight_decay)
+        .def_readwrite("clip_max_norm", &AdamOptimizer::clip_max_norm)
         .def_readwrite("t", &AdamOptimizer::t);
 
     m.def("create_optimizer", &create_optimizer, "Create Adam optimizer",
@@ -102,7 +104,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("beta1") = 0.9f,
           py::arg("beta2") = 0.999f,
           py::arg("epsilon") = 1e-8f,
-          py::arg("weight_decay") = 0.0f);
+          py::arg("weight_decay") = 0.0f,
+          py::arg("clip_max_norm") = 0.0f);
 
     m.def("destroy_optimizer", &destroy_optimizer, "Free Adam optimizer memory");
 

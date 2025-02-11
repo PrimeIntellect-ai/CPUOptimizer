@@ -4,20 +4,24 @@
 #include <math.h>
 #include <time.h>
 #include <string.h>
+#include <stddef.h>
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
+
+#define MAX_NORM_ONE 1
 
 #if __cplusplus
 #define restrict __restrict__
 #endif
 
 typedef struct {
-#define SER_SIZE (5 * sizeof(float) + 2 * sizeof(uint64_t))
+#define SER_SIZE (6 * sizeof(float) + 2 * sizeof(uint64_t))
     float beta1;
     float beta2;
     float lr;
     float eps;
     float weight_decay;
+    float clip_max_norm;
     uint64_t param_count;
     uint64_t t;
     void* m_base;      // Pointer to free for m
@@ -27,7 +31,7 @@ typedef struct {
 } AdamOptimizer;
 
 // Initialize the Adam optimizer
-static AdamOptimizer* adam_init(int param_count, float learning_rate, float beta1, float beta2, float eps, float weight_decay) {
+static AdamOptimizer* adam_init(int param_count, float learning_rate, float beta1, float beta2, float eps, float weight_decay, float clip_max_norm) {
     // Allocate pointer to return
     AdamOptimizer* optimizer = (AdamOptimizer*)malloc(sizeof(AdamOptimizer));
     if (optimizer == NULL) {
@@ -42,6 +46,7 @@ static AdamOptimizer* adam_init(int param_count, float learning_rate, float beta
     optimizer->eps = eps;
     optimizer->weight_decay = weight_decay;
     optimizer->param_count = param_count;
+    optimizer->clip_max_norm = clip_max_norm;
     optimizer->t = 0;
 
     // Initialize the optimizer state.
@@ -108,6 +113,59 @@ static AdamOptimizer* adam_deserialize(const char* buffer) {
     return optimizer;
 }
 
+
+static float l2_norm_naive(float* restrict vec, size_t n) {
+    float sum = 0.0f;
+    for (size_t i = 0; i < n; ++i)
+        sum += vec[i] * vec[i];
+    return sqrtf(sum);
+}
+
+#if defined(__AVX2__)
+#include <immintrin.h>
+static float l2_norm_avx256(float* restrict vec, size_t n) {    
+    __m256 vsum = _mm256_setzero_ps();
+
+    // Sum 8 elements at a time
+    size_t i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 v = _mm256_loadu_ps(vec + i);
+        vsum = _mm256_add_ps(vsum, _mm256_mul_ps(v, v));
+    }
+
+    // _mm256_reduce_add_ps doesn't exist?
+    __attribute__((aligned(32))) float sum_arr[8];
+    _mm256_store_ps(sum_arr, vsum);
+    float sum = ((sum_arr[0] + sum_arr[1]) + (sum_arr[2] + sum_arr[3])) +
+                ((sum_arr[4] + sum_arr[5]) + (sum_arr[6] + sum_arr[7]));
+
+    // Process remaining elements
+    for (; i < n; i++)
+        sum += vec[i] * vec[i];
+    return sqrtf(sum);
+}
+#endif
+
+#if defined(__AVX512F__)
+#include <immintrin.h>
+static float l2_norm_avx512(float* restrict vec, size_t n) {
+    __m512 vsum = _mm512_setzero_ps();
+
+    size_t i = 0;
+    for (; i + 15 < n; i += 16) {
+        __m512 v = _mm512_loadu_ps(vec + i);
+        vsum = _mm512_add_ps(vsum, _mm512_mul_ps(v, v));
+    }
+
+    float sum = _mm512_reduce_add_ps(vsum);
+
+    // Process any remaining elements
+    for (; i < n; i++)
+        sum += vec[i] * vec[i];
+    return sqrtf(sum);
+}
+#endif
+
 static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
     optimizer->t += 1;
     float beta1 = powf(optimizer->beta1, optimizer->t);
@@ -119,6 +177,7 @@ static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, flo
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
     float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay;
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_naive(grad, optimizer->param_count) : 1;
 
     for(uint64_t i = 0; i < optimizer->param_count; i++) {
         float g = grad[i];
@@ -126,6 +185,10 @@ static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, flo
         float m_ = optimizer->m[i];
         float v_ = optimizer->v[i];
 
+        // Apply grad clipping
+        g *= clip_grad_norm_scale;
+
+        // Apply weight decay
         g += weight_decay_factor * p;
 
         float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
@@ -150,8 +213,8 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
     float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay;
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_avx256(grad, optimizer->param_count) : 1;
 
-    // Process 8 elements at a time using AVX2
     uint64_t i;
     __m256 beta1_vec = _mm256_set1_ps(optimizer->beta1);
     __m256 beta2_vec = _mm256_set1_ps(optimizer->beta2);
@@ -164,6 +227,7 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
     __m256 weight_decay_vec = _mm256_set1_ps(weight_decay_factor);
     __m256 lr_vec = _mm256_set1_ps(optimizer->lr);
     __m256 eps_vec = _mm256_set1_ps(optimizer->eps);
+    __m256 clip_grad_norm_scale_vec = _mm256_set1_ps(clip_grad_norm_scale);
 
     for(i = 0; i + 7 < optimizer->param_count; i += 8) {
         // Load 8 elements
@@ -171,6 +235,9 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
         __m256 param_vec = _mm256_loadu_ps(&param[i]);
         __m256 m_prev_vec = _mm256_load_ps(&optimizer->m[i]);
         __m256 v_prev_vec = _mm256_load_ps(&optimizer->v[i]);
+
+        // Apply grad clipping
+        grad_vec = _mm256_mul_ps(grad_vec, clip_grad_norm_scale_vec);
 
         // Apply weight decay
         grad_vec = _mm256_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
@@ -212,6 +279,7 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
         float m_ = optimizer->m[i];
         float v_ = optimizer->v[i];
 
+        g *= clip_grad_norm_scale;
         g += weight_decay_factor * p;
 
         float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
@@ -237,8 +305,8 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
     float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay;
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_avx512(grad, optimizer->param_count) : 1;
 
-    // Process 16 elements at a time using AVX-512
     uint64_t i;
     __m512 beta1_vec = _mm512_set1_ps(optimizer->beta1);
     __m512 beta2_vec = _mm512_set1_ps(optimizer->beta2);
@@ -251,6 +319,7 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
     __m512 weight_decay_vec = _mm512_set1_ps(weight_decay_factor);
     __m512 lr_vec = _mm512_set1_ps(optimizer->lr);
     __m512 eps_vec = _mm512_set1_ps(optimizer->eps);
+    __m512 clip_grad_norm_scale_vec = _mm512_set1_ps(clip_grad_norm_scale);
 
     for(i = 0; i + 15 < optimizer->param_count; i += 16) {
         // Load 16 elements
@@ -258,6 +327,9 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
         __m512 param_vec = _mm512_loadu_ps(&param[i]);
         __m512 m_prev_vec = _mm512_load_ps(&optimizer->m[i]);
         __m512 v_prev_vec = _mm512_load_ps(&optimizer->v[i]);
+
+        // Apply grad clipping
+        grad_vec = _mm512_mul_ps(grad_vec, clip_grad_norm_scale_vec);
 
         // Apply weight decay
         grad_vec = _mm512_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
@@ -299,6 +371,7 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
         float m_ = optimizer->m[i];
         float v_ = optimizer->v[i];
 
+        g *= clip_grad_norm_scale;
         g += weight_decay_factor * p;
 
         float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
@@ -310,4 +383,6 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
     }
 }
 #endif
+
+
 

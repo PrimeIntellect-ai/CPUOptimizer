@@ -23,7 +23,8 @@ static double test_impl(void step_fn(AdamOptimizer* optimizer, float* volatile p
     float beta2 = 0.999f;
     float epsilon = 1e-8f;
     float weight_decay = 0.0f;
-    AdamOptimizer* optimizer = adam_init(PARAM_COUNT, learning_rate, beta1, beta2, epsilon, weight_decay);
+    float clip_max_norm = 1.0f;
+    AdamOptimizer* optimizer = adam_init(PARAM_COUNT, learning_rate, beta1, beta2, epsilon, weight_decay, clip_max_norm);
     
     // Time the optimization steps
     struct timespec start, end;
@@ -58,12 +59,12 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
 int main(void) {
     float *params_naive, *params_avx2, *params_avx512;
     double time_naive = test_impl(adam_step_naive, &params_naive);
-    printf("Naive implementation: %.3f seconds\n", time_naive);
+    printf("Naive implementation: %.3f seconds\n\n", time_naive);
 
 #if defined(__AVX2__)
     double time_avx2 = test_impl(adam_step_avx256, &params_avx2);
     verify_results(params_naive, params_avx2, "AVX2");
-    printf("AVX2 implementation: %.3f seconds (%.2fx speedup)\n", 
+    printf("AVX2 implementation: %.3f seconds (%.2fx speedup)\n\n", 
            time_avx2, time_naive/time_avx2);
     free(params_avx2);
 #endif
@@ -71,7 +72,7 @@ int main(void) {
 #if defined(__AVX512F__)
     double time_avx512 = test_impl(adam_step_avx512, &params_avx512);
     verify_results(params_naive, params_avx512, "AVX-512");
-    printf("AVX-512 implementation: %.3f seconds (%.2fx speedup)\n", 
+    printf("AVX-512 implementation: %.3f seconds (%.2fx speedup)\n\n", 
            time_avx512, time_naive/time_avx512);
     free(params_avx512);
 #endif

@@ -1,8 +1,8 @@
 from typing import Any, Callable, Iterable, Optional
 
 import torch
-import torch.optim.optimizer
 from torch.optim.optimizer import ParamsT, StateDict
+from torch.distributed.tensor import DTensor
 
 import CPUOptimizer.bindings as bindings
 
@@ -19,16 +19,26 @@ class CPUAdam(torch.optim.Optimizer):
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         weight_decay: float = 0.0,
+        clip_max_norm: float = 0.0,
         pipeline_hook: Callable | None = None,
     ):
         super().__init__(
-            params, defaults=dict(lr=lr, beta1=betas[0], beta2=betas[1], eps=eps, weight_decay=weight_decay, pipeline_hook=pipeline_hook)
+            params,
+            defaults=dict(
+                lr=lr,
+                beta1=betas[0],
+                beta2=betas[1],
+                eps=eps,
+                weight_decay=weight_decay,
+                clip_max_norm=clip_max_norm,
+                pipeline_hook=pipeline_hook
+            )
         )
 
         for group in self.param_groups:
             for param in group["params"]:
                 self.state[param] = bindings.create_optimizer(
-                    param, lr, betas[0], betas[1], eps, weight_decay,
+                    param, lr, betas[0], betas[1], eps, weight_decay, clip_max_norm,
                 )
                 if pipeline_hook:
                     param.register_post_accumulate_grad_hook(pipeline_hook)
@@ -44,12 +54,17 @@ class CPUAdam(torch.optim.Optimizer):
 
     def step_param(self, param: torch.Tensor) -> None:
         """Perform an optimizer step on one parameter. This is done with whatever SIMD is available."""
+
         param_opt = self.state.get(param)
         if type(param_opt) is not bindings.AdamOptimizer:
             raise ValueError(
                 f"Parameter is not registered with this optimizer: {param}"
             )
-        bindings.step(param_opt, param.data, param.grad)
+        
+        if isinstance(param, DTensor):
+            bindings.step(param_opt, param.to_local(), param.grad.to_local())
+        else:
+            bindings.step(param_opt, param.data, param.grad)
 
     def __del__(self):
         """Free the memory held by C++. Otherwise we risk leaking unholy amounts of memory."""

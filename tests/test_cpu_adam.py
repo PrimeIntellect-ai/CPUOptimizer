@@ -28,7 +28,7 @@ def main():
     # Training settings
     batch_size = 32
     epochs = 50
-    lr = 0.01
+    lr = 0.0001
     betas = (0.9, 0.999)
     eps = 1e-8
     
