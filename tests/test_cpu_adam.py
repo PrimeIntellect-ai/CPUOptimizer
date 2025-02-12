@@ -23,7 +23,7 @@ class SimpleNet(nn.Module):
         x = self.fc3(x)
         return F.log_softmax(x, dim=1)
 
-def main():
+def main(use_adamw=False):
     # Training settings
     batch_size = 32
     epochs = 50
@@ -59,7 +59,7 @@ def main():
     # Create optimizers
     def pipeline_hook(param):
         cpu_opt.step_param(param)
-    cpu_opt = CPUOptimizer(model_cpu.parameters(), lr=lr, betas=betas, eps=eps, pipeline_hook=pipeline_hook)
+    cpu_opt = CPUOptimizer(model_cpu.parameters(), lr=lr, betas=betas, eps=eps, pipeline_hook=pipeline_hook, adamw=use_adamw)
     torch_opt = Adam(model_torch.parameters(), lr=lr, betas=betas, eps=eps)
     
     # Train both models
@@ -101,8 +101,14 @@ def main():
     print()
     print("Max diff:", max_diff)
 
-    torch.save(model_cpu.state_dict(), "/tmp/cpu_model.pth")
-    model_cpu_state_dict = torch.load("/tmp/cpu_model.pth")
+    save_path = "/tmp/cpu_model_adamw.pth" if use_adamw else "/tmp/cpu_model.pth"
+    torch.save(model_cpu.state_dict(), save_path)
+    model_cpu_state_dict = torch.load(save_path)
+
+def run_training(use_adamw=False):
+    print(f"\nTesting {'AdamW' if use_adamw else 'Adam'} optimizer...")
+    main(use_adamw)
 
 if __name__ == '__main__':
-    main()
+    run_training(use_adamw=False)
+    run_training(use_adamw=True)
