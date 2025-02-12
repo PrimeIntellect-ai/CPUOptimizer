@@ -4,9 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from sklearn.datasets import load_digits
 from sklearn.preprocessing import StandardScaler
-from CPUOptimizer.cpu_adam import CPUAdam
+from CPUOptimizer import CPUOptimizer
 from torch.optim import Adam
-import math
 
 # pip install numpy torch scikit-learn
 
@@ -52,7 +51,7 @@ def main():
     model_cpu.train()
     model_torch.train()
 
-    print("Using vector width:", CPUAdam.vector_width())
+    print("Using vector width:", CPUOptimizer.vector_width())
     print("Total params:", sum(p.numel() for p in model_cpu.parameters()))
     print("Params:", list(name for name, _ in model_cpu.named_parameters()))
     print()
@@ -60,7 +59,7 @@ def main():
     # Create optimizers
     def pipeline_hook(param):
         cpu_opt.step_param(param)
-    cpu_opt = CPUAdam(model_cpu.parameters(), lr=lr, betas=betas, eps=eps, pipeline_hook=pipeline_hook)
+    cpu_opt = CPUOptimizer(model_cpu.parameters(), lr=lr, betas=betas, eps=eps, pipeline_hook=pipeline_hook)
     torch_opt = Adam(model_torch.parameters(), lr=lr, betas=betas, eps=eps)
     
     # Train both models
