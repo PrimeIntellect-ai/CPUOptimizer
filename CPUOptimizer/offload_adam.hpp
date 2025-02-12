@@ -8,9 +8,17 @@
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
+// #define __AVX2__ 1
+// #define __AVX512F__ 1
+
 #if __cplusplus
 #define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
 #endif
+
+typedef enum {
+    ADAM_STEP = 0,
+    ADAMW_STEP = 1,
+} StepKind;
 
 typedef struct {
 #define SER_SIZE (6 * sizeof(float) + 2 * sizeof(uint64_t))
@@ -112,6 +120,10 @@ static AdamOptimizer* adam_deserialize(const char* buffer) {
 }
 
 
+//////////
+// Norm //
+//////////
+
 static float l2_norm_naive(float* restrict vec, size_t n) {
     float sum = 0.0f;
     for (size_t i = 0; i < n; ++i)
@@ -164,17 +176,24 @@ static float l2_norm_avx512(float* restrict vec, size_t n) {
 }
 #endif
 
+//////////
+// STEP //
+//////////
+
+template<StepKind stepkind>
 static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
     optimizer->t += 1;
-    float beta1 = powf(optimizer->beta1, optimizer->t);
-    float beta2 = powf(optimizer->beta2, optimizer->t);
+    float beta1_t = powf(optimizer->beta1, optimizer->t);
+    float beta2_t = powf(optimizer->beta2, optimizer->t);
+    float lr = optimizer->lr;
+    float eps = optimizer->eps;
     float one_minus_beta1 = 1.0f - optimizer->beta1;
     float one_minus_beta2 = 1.0f - optimizer->beta2;
-    float one_minus_beta1_t = 1.0f - beta1;
-    float one_minus_beta2_t = 1.0f - beta2;
+    float one_minus_beta1_t = 1.0f - beta1_t;
+    float one_minus_beta2_t = 1.0f - beta2_t;
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
-    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay;
+    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay * (stepkind == StepKind::ADAMW_STEP ? lr : 1);
     float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_naive(grad, optimizer->param_count) : 1;
 
     for(uint64_t i = 0; i < optimizer->param_count; i++) {
@@ -187,30 +206,37 @@ static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, flo
         g *= clip_grad_norm_scale;
 
         // Apply weight decay
-        g += weight_decay_factor * p;
+        if constexpr (stepkind == StepKind::ADAM_STEP) {
+            g += weight_decay_factor * p;
+        } else if (stepkind == StepKind::ADAMW_STEP) {
+            p -= weight_decay_factor * p;
+        }
 
         float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
         float v = optimizer->v[i] = optimizer->beta2 * v_ + one_minus_beta2 * g * g;
 
         float m_hat = m * inv_one_minus_beta1_t;
         float v_hat = v * inv_one_minus_beta2_t;
-        param[i] = p - (optimizer->lr * m_hat / (sqrtf(v_hat) + optimizer->eps));
+        param[i] = p - (lr * m_hat / (sqrtf(v_hat) + eps));
     }
 }
 
 #if defined(__AVX2__)
 #include <immintrin.h>
+template<StepKind stepkind>
 static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
     optimizer->t += 1;
-    float beta1 = powf(optimizer->beta1, optimizer->t);
-    float beta2 = powf(optimizer->beta2, optimizer->t);
+    float beta1_t = powf(optimizer->beta1, optimizer->t);
+    float beta2_t = powf(optimizer->beta2, optimizer->t);
+    float lr = optimizer->lr;
+    float eps = optimizer->eps;
     float one_minus_beta1 = 1.0f - optimizer->beta1;
     float one_minus_beta2 = 1.0f - optimizer->beta2;
-    float one_minus_beta1_t = 1.0f - beta1;
-    float one_minus_beta2_t = 1.0f - beta2;
+    float one_minus_beta1_t = 1.0f - beta1_t;
+    float one_minus_beta2_t = 1.0f - beta2_t;
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
-    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay;
+    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay * (stepkind == StepKind::ADAMW_STEP ? lr : 1);
     float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_avx256(grad, optimizer->param_count) : 1;
 
     uint64_t i;
@@ -223,8 +249,8 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
     __m256 inv_one_minus_beta1_t_vec = _mm256_set1_ps(inv_one_minus_beta1_t);
     __m256 inv_one_minus_beta2_t_vec = _mm256_set1_ps(inv_one_minus_beta2_t);
     __m256 weight_decay_vec = _mm256_set1_ps(weight_decay_factor);
-    __m256 lr_vec = _mm256_set1_ps(optimizer->lr);
-    __m256 eps_vec = _mm256_set1_ps(optimizer->eps);
+    __m256 lr_vec = _mm256_set1_ps(lr);
+    __m256 eps_vec = _mm256_set1_ps(eps);
     __m256 clip_grad_norm_scale_vec = _mm256_set1_ps(clip_grad_norm_scale);
 
     for(i = 0; i + 7 < optimizer->param_count; i += 8) {
@@ -238,7 +264,11 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
         grad_vec = _mm256_mul_ps(grad_vec, clip_grad_norm_scale_vec);
 
         // Apply weight decay
-        grad_vec = _mm256_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
+        if constexpr (stepkind == StepKind::ADAM_STEP) {
+            grad_vec = _mm256_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
+        } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
+            param_vec = _mm256_sub_ps(param_vec, _mm256_mul_ps(weight_decay_vec, param_vec));
+        }
 
         // Calculate m = beta1 * m + (1-beta1) * grad
         __m256 m_vec = _mm256_fmadd_ps(beta1_vec, m_prev_vec,
@@ -278,31 +308,39 @@ static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, fl
         float v_ = optimizer->v[i];
 
         g *= clip_grad_norm_scale;
-        g += weight_decay_factor * p;
+
+        if constexpr (stepkind == StepKind::ADAM_STEP) {
+            g += weight_decay_factor * p;
+        } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
+            p -= weight_decay_factor * p;
+        }
 
         float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
         float v = optimizer->v[i] = optimizer->beta2 * v_ + one_minus_beta2 * g * g;
 
         float m_hat = m * inv_one_minus_beta1_t;
         float v_hat = v * inv_one_minus_beta2_t;
-        param[i] = p - (optimizer->lr * m_hat / (sqrtf(v_hat) + optimizer->eps));
+        param[i] = p - (lr * m_hat / (sqrtf(v_hat) + eps));
     }
 }
 #endif
 
 #if defined(__AVX512F__)
 #include <immintrin.h>
+template<StepKind stepkind>
 static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
     optimizer->t += 1;
-    float beta1 = powf(optimizer->beta1, optimizer->t);
-    float beta2 = powf(optimizer->beta2, optimizer->t);
+    float beta1_t = powf(optimizer->beta1, optimizer->t);
+    float beta2_t = powf(optimizer->beta2, optimizer->t);
+    float lr = optimizer->lr;
+    float eps = optimizer->eps;
     float one_minus_beta1 = 1.0f - optimizer->beta1;
     float one_minus_beta2 = 1.0f - optimizer->beta2;
-    float one_minus_beta1_t = 1.0f - beta1;
-    float one_minus_beta2_t = 1.0f - beta2;
+    float one_minus_beta1_t = 1.0f - beta1_t;
+    float one_minus_beta2_t = 1.0f - beta2_t;
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
-    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay;
+    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay * (stepkind == StepKind::ADAMW_STEP ? lr : 1);
     float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_avx512(grad, optimizer->param_count) : 1;
 
     uint64_t i;
@@ -315,8 +353,8 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
     __m512 inv_one_minus_beta1_t_vec = _mm512_set1_ps(inv_one_minus_beta1_t);
     __m512 inv_one_minus_beta2_t_vec = _mm512_set1_ps(inv_one_minus_beta2_t);
     __m512 weight_decay_vec = _mm512_set1_ps(weight_decay_factor);
-    __m512 lr_vec = _mm512_set1_ps(optimizer->lr);
-    __m512 eps_vec = _mm512_set1_ps(optimizer->eps);
+    __m512 lr_vec = _mm512_set1_ps(lr);
+    __m512 eps_vec = _mm512_set1_ps(eps);
     __m512 clip_grad_norm_scale_vec = _mm512_set1_ps(clip_grad_norm_scale);
 
     for(i = 0; i + 15 < optimizer->param_count; i += 16) {
@@ -330,7 +368,11 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
         grad_vec = _mm512_mul_ps(grad_vec, clip_grad_norm_scale_vec);
 
         // Apply weight decay
-        grad_vec = _mm512_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
+        if constexpr (stepkind == StepKind::ADAM_STEP) {
+            grad_vec = _mm512_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
+        } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
+            param_vec = _mm512_sub_ps(param_vec, _mm512_mul_ps(weight_decay_vec, param_vec));
+        }
 
         // Calculate m = beta1 * m + (1-beta1) * grad
         __m512 m_vec = _mm512_fmadd_ps(beta1_vec, m_prev_vec,
@@ -370,7 +412,12 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
         float v_ = optimizer->v[i];
 
         g *= clip_grad_norm_scale;
-        g += weight_decay_factor * p;
+
+        if constexpr (stepkind == StepKind::ADAM_STEP) {
+            g += weight_decay_factor * p;
+        } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
+            p -= weight_decay_factor * p;
+        }
 
         float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
         float v = optimizer->v[i] = optimizer->beta2 * v_ + one_minus_beta2 * g * g;
@@ -383,4 +430,13 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
 #endif
 
 
-
+template<StepKind stepkind>
+static void adam_step(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
+#if defined(__AVX512F__)
+    adam_step_avx512<stepkind>(optimizer, param, grad);
+#elif defined(__AVX2__)
+    adam_step_avx256<stepkind>(optimizer, param, grad);
+#else
+    adam_step_naive<stepkind>(optimizer, param, grad);
+#endif
+}

@@ -1,6 +1,6 @@
-#include "../CPUOptimizer/offload_adam.h"
+#include "../CPUOptimizer/offload_adam.hpp"
 
-// gcc benchmark_vs_naive.c -lm -O3 -march=native -fno-math-errno
+// c++ benchmark_vs_naive.cpp -lm -O3 -march=native -fno-math-errno
 
 #define PARAM_COUNT 10000000
 
@@ -58,21 +58,43 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
 
 int main(void) {
     float *params_naive, *params_avx2, *params_avx512;
-    double time_naive = test_impl(adam_step_naive, &params_naive);
-    printf("Naive implementation: %.3f seconds\n\n", time_naive);
+    double time_naive = test_impl(adam_step_naive<StepKind::ADAM_STEP>, &params_naive);
+
+    printf("\n\033[35m🦋 Benchmarking vectorized implementations vs naive C implementation.\033[0m\n\n");
+    printf("Naive Adam implementation: %.3f seconds\n\n", time_naive);
 
 #if defined(__AVX2__)
-    double time_avx2 = test_impl(adam_step_avx256, &params_avx2);
+    double time_avx2 = test_impl(adam_step_avx256<StepKind::ADAM_STEP>, &params_avx2);
     verify_results(params_naive, params_avx2, "AVX2");
-    printf("AVX2 implementation: %.3f seconds (%.2fx speedup)\n\n", 
+    printf("AVX2 Adam implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n", 
            time_avx2, time_naive/time_avx2);
     free(params_avx2);
 #endif
 
 #if defined(__AVX512F__)
-    double time_avx512 = test_impl(adam_step_avx512, &params_avx512);
+    double time_avx512 = test_impl(adam_step_avx512<StepKind::ADAM_STEP>, &params_avx512);
     verify_results(params_naive, params_avx512, "AVX-512");
-    printf("AVX-512 implementation: %.3f seconds (%.2fx speedup)\n\n", 
+    printf("AVX-512 Adam implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n", 
+           time_avx512, time_naive/time_avx512);
+    free(params_avx512);
+#endif
+
+    // And now for adamw
+    time_naive = test_impl(adam_step_naive<StepKind::ADAMW_STEP>, &params_naive);
+    printf("Naive AdamW implementation: %.3f seconds\n\n", time_naive);
+
+#if defined(__AVX2__)
+    time_avx2 = test_impl(adam_step_avx256<StepKind::ADAMW_STEP>, &params_avx2);
+    verify_results(params_naive, params_avx2, "AVX2");
+    printf("AVX2 AdamW implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n", 
+           time_avx2, time_naive/time_avx2);
+    free(params_avx2);
+#endif
+
+#if defined(__AVX512F__)
+    time_avx512 = test_impl(adam_step_avx512<StepKind::ADAMW_STEP>, &params_avx512);
+    verify_results(params_naive, params_avx512, "AVX-512");
+    printf("AVX-512 AdamW implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n", 
            time_avx512, time_naive/time_avx512);
     free(params_avx512);
 #endif

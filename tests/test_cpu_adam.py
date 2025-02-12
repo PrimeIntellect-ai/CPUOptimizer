@@ -106,7 +106,7 @@ def main(use_adamw=False):
     model_cpu_state_dict = torch.load(save_path)
 
 def run_training(use_adamw=False):
-    print(f"\nTesting {'AdamW' if use_adamw else 'Adam'} optimizer...")
+    print(f"\n\033[35m🦋 Training a test model with the {'AdamW' if use_adamw else 'Adam'} optimizer...\033[0m\n")
     main(use_adamw)
 
 if __name__ == '__main__':
