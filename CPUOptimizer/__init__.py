@@ -63,16 +63,10 @@ class CPUOptimizer(torch.optim.Optimizer):
                 f"Parameter is not registered with this optimizer: {param}"
             )
         
-        if isinstance(param, DTensor):
-            if self.defaults["adamw"]:
-                bindings.step_adamw(param_opt, param._local_tensor, param.grad._local_tensor)
-            else:
-                bindings.step_adam(param_opt, param._local_tensor, param.grad._local_tensor)
-        else:
-            if self.defaults["adamw"]:
-                bindings.step_adamw(param_opt, param, param.grad)
-            else:
-                bindings.step_adam(param_opt, param, param.grad)
+        local_param = param._local_tensor if isinstance(param, DTensor) else param
+        local_grad = param.grad._local_tensor if isinstance(param, DTensor) else param.grad
+        step_fn = bindings.step_adamw if self.defaults["adamw"] else bindings.step_adam
+        step_fn(param_opt, local_param, local_grad)
 
     def __del__(self):
         """Free the memory held by C++. Otherwise we risk leaking unholy amounts of memory."""
