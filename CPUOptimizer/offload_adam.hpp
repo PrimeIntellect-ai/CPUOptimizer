@@ -131,31 +131,6 @@ static float l2_norm_naive(float* restrict vec, size_t n) {
     return sqrtf(sum);
 }
 
-#if defined(__AVX2__)
-#include <immintrin.h>
-static float l2_norm_avx256(float* restrict vec, size_t n) {    
-    __m256 vsum = _mm256_setzero_ps();
-
-    // Sum 8 elements at a time
-    size_t i = 0;
-    for (; i + 7 < n; i += 8) {
-        __m256 v = _mm256_loadu_ps(vec + i);
-        vsum = _mm256_add_ps(vsum, _mm256_mul_ps(v, v));
-    }
-
-    // _mm256_reduce_add_ps doesn't exist?
-    __attribute__((aligned(32))) float sum_arr[8];
-    _mm256_store_ps(sum_arr, vsum);
-    float sum = ((sum_arr[0] + sum_arr[1]) + (sum_arr[2] + sum_arr[3])) +
-                ((sum_arr[4] + sum_arr[5]) + (sum_arr[6] + sum_arr[7]));
-
-    // Process remaining elements
-    for (; i < n; i++)
-        sum += vec[i] * vec[i];
-    return sqrtf(sum);
-}
-#endif
-
 #if defined(__AVX512F__)
 #include <immintrin.h>
 static float l2_norm_avx512(float* restrict vec, size_t n) {
@@ -220,110 +195,6 @@ static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, flo
         param[i] = p - (lr * m_hat / (sqrtf(v_hat) + eps));
     }
 }
-
-#if defined(__AVX2__)
-#include <immintrin.h>
-template<StepKind stepkind>
-static void adam_step_avx256(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
-    optimizer->t += 1;
-    float beta1_t = powf(optimizer->beta1, optimizer->t);
-    float beta2_t = powf(optimizer->beta2, optimizer->t);
-    float lr = optimizer->lr;
-    float eps = optimizer->eps;
-    float one_minus_beta1 = 1.0f - optimizer->beta1;
-    float one_minus_beta2 = 1.0f - optimizer->beta2;
-    float one_minus_beta1_t = 1.0f - beta1_t;
-    float one_minus_beta2_t = 1.0f - beta2_t;
-    float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
-    float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
-    float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay * (stepkind == StepKind::ADAMW_STEP ? lr : 1);
-    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_avx256(grad, optimizer->param_count) : 1;
-
-    uint64_t i;
-    __m256 beta1_vec = _mm256_set1_ps(optimizer->beta1);
-    __m256 beta2_vec = _mm256_set1_ps(optimizer->beta2);
-    __m256 one_minus_beta1_vec = _mm256_set1_ps(one_minus_beta1);
-    __m256 one_minus_beta2_vec = _mm256_set1_ps(one_minus_beta2);
-    __m256 one_minus_beta1_t_vec = _mm256_set1_ps(one_minus_beta1_t);
-    __m256 one_minus_beta2_t_vec = _mm256_set1_ps(one_minus_beta2_t);
-    __m256 inv_one_minus_beta1_t_vec = _mm256_set1_ps(inv_one_minus_beta1_t);
-    __m256 inv_one_minus_beta2_t_vec = _mm256_set1_ps(inv_one_minus_beta2_t);
-    __m256 weight_decay_vec = _mm256_set1_ps(weight_decay_factor);
-    __m256 lr_vec = _mm256_set1_ps(lr);
-    __m256 eps_vec = _mm256_set1_ps(eps);
-    __m256 clip_grad_norm_scale_vec = _mm256_set1_ps(clip_grad_norm_scale);
-
-    for(i = 0; i + 7 < optimizer->param_count; i += 8) {
-        // Load 8 elements
-        __m256 grad_vec = _mm256_loadu_ps(&grad[i]);
-        __m256 param_vec = _mm256_loadu_ps(&param[i]);
-        __m256 m_prev_vec = _mm256_load_ps(&optimizer->m[i]);
-        __m256 v_prev_vec = _mm256_load_ps(&optimizer->v[i]);
-
-        // Apply grad clipping
-        grad_vec = _mm256_mul_ps(grad_vec, clip_grad_norm_scale_vec);
-
-        // Apply weight decay
-        if constexpr (stepkind == StepKind::ADAM_STEP) {
-            grad_vec = _mm256_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
-        } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
-            param_vec = _mm256_sub_ps(param_vec, _mm256_mul_ps(weight_decay_vec, param_vec));
-        }
-
-        // Calculate m = beta1 * m + (1-beta1) * grad
-        __m256 m_vec = _mm256_fmadd_ps(beta1_vec, m_prev_vec,
-                                      _mm256_mul_ps(one_minus_beta1_vec, grad_vec));
-
-        // Calculate v = beta2 * v + (1-beta2) * grad^2
-        __m256 grad_sq = _mm256_mul_ps(grad_vec, grad_vec);
-        __m256 v_vec = _mm256_fmadd_ps(beta2_vec, v_prev_vec,
-                                      _mm256_mul_ps(one_minus_beta2_vec, grad_sq));
-
-        // Store m and v
-        _mm256_store_ps(&optimizer->m[i], m_vec);
-        _mm256_store_ps(&optimizer->v[i], v_vec);
-
-        // Calculate m_hat = m / (1-beta1^t)
-        __m256 m_hat = _mm256_mul_ps(m_vec, inv_one_minus_beta1_t_vec);
-
-        // Calculate v_hat = v / (1-beta2^t)
-        __m256 v_hat = _mm256_mul_ps(v_vec, inv_one_minus_beta2_t_vec);
-
-        // Calculate sqrt(v_hat) + eps
-        __m256 denom = _mm256_add_ps(_mm256_sqrt_ps(v_hat), eps_vec);
-
-        // Calculate update = lr * m_hat / (sqrt(v_hat) + eps)
-        __m256 update = _mm256_div_ps(_mm256_mul_ps(lr_vec, m_hat), denom);
-
-        // Update parameters
-        param_vec = _mm256_sub_ps(param_vec, update);
-        _mm256_storeu_ps(&param[i], param_vec);
-    }
-
-    // Handle remaining elements
-    for(; i < optimizer->param_count; i++) {
-        float g = grad[i];
-        float p = param[i];
-        float m_ = optimizer->m[i];
-        float v_ = optimizer->v[i];
-
-        g *= clip_grad_norm_scale;
-
-        if constexpr (stepkind == StepKind::ADAM_STEP) {
-            g += weight_decay_factor * p;
-        } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
-            p -= weight_decay_factor * p;
-        }
-
-        float m = optimizer->m[i] = optimizer->beta1 * m_ + one_minus_beta1 * g;
-        float v = optimizer->v[i] = optimizer->beta2 * v_ + one_minus_beta2 * g * g;
-
-        float m_hat = m * inv_one_minus_beta1_t;
-        float v_hat = v * inv_one_minus_beta2_t;
-        param[i] = p - (lr * m_hat / (sqrtf(v_hat) + eps));
-    }
-}
-#endif
 
 #if defined(__AVX512F__)
 #include <immintrin.h>
@@ -432,11 +303,9 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
 
 template<StepKind stepkind>
 static void adam_step(AdamOptimizer* optimizer, float* restrict param, float* restrict grad) {
-#if defined(__AVX512F__)
-    adam_step_avx512<stepkind>(optimizer, param, grad);
-#elif defined(__AVX2__)
-    adam_step_avx256<stepkind>(optimizer, param, grad);
-#else
+#if !defined(__AVX512F__)
     adam_step_naive<stepkind>(optimizer, param, grad);
+#else
+    adam_step_avx512<stepkind>(optimizer, param, grad);
 #endif
 }

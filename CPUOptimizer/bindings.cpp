@@ -59,18 +59,6 @@ torch::Tensor step_adam_avx512(
 }
 #endif
 
-#if defined(__AVX2__)
-torch::Tensor step_adam_avx256(
-    AdamOptimizer* optimizer,
-    torch::Tensor& param,
-    torch::Tensor& grad
-) {
-    STEP_CHECKS()
-    adam_step_avx256<StepKind::ADAM_STEP>(optimizer, param.data_ptr<float>(),  grad.data_ptr<float>());
-    return param;
-}
-#endif
-
 torch::Tensor step_adam(
     AdamOptimizer* optimizer,
     torch::Tensor& param,
@@ -78,8 +66,6 @@ torch::Tensor step_adam(
 ) {
 #if defined(__AVX512F__)
     return step_adam_avx512(optimizer, param, grad);
-#elif defined(__AVX2__)
-    return step_adam_avx256(optimizer, param, grad);
 #else
     return step_adam_naive(optimizer, param, grad);
 #endif
@@ -113,18 +99,6 @@ torch::Tensor step_adamw_avx512(
 }
 #endif
 
-#if defined(__AVX2__)
-torch::Tensor step_adamw_avx256(
-    AdamOptimizer* optimizer,
-    torch::Tensor& param,
-    torch::Tensor& grad
-) {
-    STEP_CHECKS()
-    adam_step_avx256<StepKind::ADAMW_STEP>(optimizer, param.data_ptr<float>(),  grad.data_ptr<float>());
-    return param;
-}
-#endif
-
 torch::Tensor step_adamw(
     AdamOptimizer* optimizer,
     torch::Tensor& param,
@@ -132,8 +106,6 @@ torch::Tensor step_adamw(
 ) {
 #if defined(__AVX512F__)
     return step_adam_avx512(optimizer, param, grad);
-#elif defined(__AVX2__)
-    return step_adam_avx256(optimizer, param, grad);
 #else
     return step_adam_naive(optimizer, param, grad);
 #endif
@@ -148,8 +120,6 @@ torch::Tensor step_adamw(
 int vector_width(void) {
 #if defined(__AVX512F__)
     return 512;
-#elif defined(__AVX2__)
-    return 256;
 #else
     return 1;
 #endif
@@ -191,13 +161,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("grad"));
 #endif
 
-#if defined(__AVX2__)
-    m.def("step_adam_avx256", &step_adam_avx256, "AVX2 optimized Adam optimizer step",
-          py::arg("optimizer"),
-          py::arg("param"),
-          py::arg("grad"));
-#endif
-
     m.def("step_adam", &step_adam, "The most optimized Adam optimizer step available.",
           py::arg("optimizer"),
           py::arg("param"),
@@ -216,13 +179,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("grad"));
 #endif
 
-#if defined(__AVX2__)
-    m.def("step_adamw_avx256", &step_adamw_avx256, "AVX2 optimized AdamW optimizer step",
-        py::arg("optimizer"),
-        py::arg("param"),
-        py::arg("grad"));
-#endif
-
     m.def("step_adamw", &step_adamw, "The most optimized AdamW optimizer step available.",
           py::arg("optimizer"),
           py::arg("param"),
@@ -230,7 +186,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Other stuff
 
-    m.def("vector_width", &vector_width, "Get simd vector width (1=Scalar, 256=AVX2, 512=AVX512)");
+    m.def("vector_width", &vector_width, "Get simd vector width (1=Scalar, 512=AVX512)");
 
     m.def("serialize", [](AdamOptimizer* optimizer) {
         char* buffer = adam_serialize(optimizer);
