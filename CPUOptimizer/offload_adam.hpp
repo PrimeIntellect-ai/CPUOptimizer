@@ -169,7 +169,7 @@ static void adam_step_naive(AdamOptimizer* optimizer, float* restrict param, flo
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
     float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay * (stepkind == StepKind::ADAMW_STEP ? lr : 1);
-    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_naive(grad, optimizer->param_count) : 1;
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? (optimizer->clip_max_norm / (l2_norm_naive(grad, optimizer->param_count) + 0.000001f)) : 1;
 
     for(uint64_t i = 0; i < optimizer->param_count; i++) {
         float g = grad[i];
@@ -212,7 +212,7 @@ static void adam_step_avx512(AdamOptimizer* optimizer, float* restrict param, fl
     float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
     float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
     float weight_decay_factor = (optimizer->weight_decay != 0.0f) * optimizer->weight_decay * (stepkind == StepKind::ADAMW_STEP ? lr : 1);
-    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? l2_norm_avx512(grad, optimizer->param_count) : 1;
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0f) ? (optimizer->clip_max_norm / (l2_norm_avx512(grad, optimizer->param_count) + 0.000001f)) : 1;
 
     uint64_t i;
     __m512 beta1_vec = _mm512_set1_ps(optimizer->beta1);
