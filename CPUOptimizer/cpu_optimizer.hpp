@@ -12,11 +12,10 @@
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
-#define __AVX512F__ 1
+// TODO: Do fmadd consistently everywhere possible
+#define fmadd(a, b, c) __builtin_fma((a), (b), (c))
 
-#if __cplusplus
 #define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
-#endif
 
 typedef enum {
     ADAM_STEP = 0,

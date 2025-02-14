@@ -26,10 +26,8 @@ int main() {
     pool.run([=]() { taskfib(_pool, _accum, fibn); });
     pool.waitWorkComplete();
 
-    printf("Work completed\n");
-
-    printf("Final answer: %zu\n", accum);
-    printf("Correct answer: 75025\n");
+    printf("Work completed.\n");
+    printf("Final answer: %zu\n", accum.load());
 
     return 0;
 }
