@@ -244,7 +244,7 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
 #if defined(__AVX512F__)
 #include <immintrin.h>
 template<StepKind stepkind>
-static void adam_step_avx512_new(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, float grad_l2_norm) {
+static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, float grad_l2_norm) {
     // Update time step and extract parameters.
     optimizer->t += 1;
     size_t t      = optimizer->t;
