@@ -42,7 +42,7 @@ static double test_impl(float** out_params) {
             float norm = l2_norm_naive(gradients, 0, PARAM_COUNT);
             adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
         }
-    } else if (opt_level == NAIVE) {
+    } else if (opt_level == AVX512) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
             float norm = l2_norm(gradients, 0, PARAM_COUNT);
             adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
