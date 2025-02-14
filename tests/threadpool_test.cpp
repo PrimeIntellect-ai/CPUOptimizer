@@ -1,15 +1,10 @@
 #include "../CPUOptimizer/threadpool.hpp"
 #include <cstddef>
-#include <pthread.h>
+#include <atomic>
 
-;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-void taskfib(ThreadPool* pool, size_t* accum, int n) {
+void taskfib(ThreadPool* pool, std::atomic<size_t>* accum, int n) {
     if (n <= 1) {
-        pthread_mutex_lock(&mutex);
-        *accum += n;
-        pthread_mutex_unlock(&mutex);
+        accum->fetch_add(n, std::memory_order_relaxed);
     } else {
         pool->run([=]() { taskfib(pool, accum, n - 1); });
         pool->run([=]() { taskfib(pool, accum, n - 2); });
@@ -22,8 +17,8 @@ int main() {
     size_t fibn = 35;
     size_t n_threads = 20;
 
-    size_t accum = 0;
-    size_t* _accum = &accum;
+    std::atomic<size_t> accum{0};
+    std::atomic<size_t>* _accum = &accum;
     ThreadPool pool(20);
     ThreadPool* _pool = &pool;
 
