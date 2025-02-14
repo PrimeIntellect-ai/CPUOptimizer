@@ -210,7 +210,7 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
             p *= 1 - weight_decay_factor;
         }
 
-        if constexpr (stepkind == StepKind::ADAM_STEP || StepKind::ADAMW_STEP) {
+        if constexpr (stepkind == StepKind::ADAM_STEP || stepkind == StepKind::ADAMW_STEP) {
             // Update first and second moments
             float m = beta1 * m_ + one_minus_beta1 * g;
             float v = beta2 * v_ + one_minus_beta2 * g * g;
