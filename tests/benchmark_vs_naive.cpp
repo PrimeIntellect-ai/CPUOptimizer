@@ -64,13 +64,16 @@ static double test_impl(float** out_params) {
 }
 
 void verify_results(float* baseline, float* test, const char* impl_name) {
+    int err = 0;
     for (int i = 0; i < PARAM_COUNT; i++) {
         if (fabsf(baseline[i] - test[i]) > 1e-5f) {
             printf("Mismatch at index %d between naive and %s: %f != %f\n", 
                    i, impl_name, baseline[i], test[i]);
-            exit(1);
+            err = 1;
         }
     }
+    if (err)
+        exit(1);
     printf("Results match between naive and %s!\n", impl_name);
 }
 
