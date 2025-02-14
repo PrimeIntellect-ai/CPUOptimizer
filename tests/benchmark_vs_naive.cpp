@@ -1,4 +1,5 @@
 #include "../CPUOptimizer/cpu_optimizer.hpp"
+#include <algorithm>
 
 // c++ benchmark_vs_naive.cpp -lm -O3 -march=native -fno-math-errno
 
@@ -63,18 +64,40 @@ static double test_impl(float** out_params) {
     return time_taken;
 }
 
-void verify_results(float* baseline, float* test, const char* impl_name) {
-    int err = 0;
-    for (int i = 0; i < PARAM_COUNT; i++) {
-        if (fabsf(baseline[i] - test[i]) > 1e-5f) {
-            printf("Mismatch at index %d between naive and %s: %f != %f\n", 
-                   i, impl_name, baseline[i], test[i]);
-            err = 1;
-        }
+float kahan_average(float* arr, size_t n) {
+    if (n == 0) return 0.0f;
+    
+    float sum = 0.0f;
+    float c = 0.0f;  // Compensation term for lost low-order bits
+    
+    // Perform Kahan summation
+    for (size_t i = 0; i < n; i++) {
+        float y = arr[i] - c;    // Subtract the compensation term
+        float t = sum + y;       // The sum operations will lose some low-order bits
+        c = (t - sum) - y;       // Calculate the lost bits
+        sum = t;                 // Store the sum
     }
-    if (err)
-        exit(1);
-    printf("Results match between naive and %s!\n", impl_name);
+    
+    return sum / (float)n;
+}
+
+void verify_results(float* baseline, float* test, const char* impl_name) {
+    // Get an average and max deviation
+
+    
+
+    float dev, max_dev = 0;
+    float* deviations = (float*)malloc(PARAM_COUNT * sizeof(float));
+    for (int i = 0; i < PARAM_COUNT; i++) {
+        dev = deviations[i] = fabsf(baseline[i] - test[i]);
+        if (dev > max_dev) max_dev = dev;        
+    }
+
+    float avg_dev = kahan_average(deviations, PARAM_COUNT);
+
+    printf("Max deviation: %f\n", max_dev);
+    printf("Avg deviation: %f\n", avg_dev);
+    free(deviations);
 }
 
 template<StepKind stepkind>

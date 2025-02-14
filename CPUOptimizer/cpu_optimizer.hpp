@@ -12,8 +12,7 @@
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
-// #define __AVX2__ 1
-// #define __AVX512F__ 1
+#define __AVX512F__ 1
 
 #if __cplusplus
 #define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
