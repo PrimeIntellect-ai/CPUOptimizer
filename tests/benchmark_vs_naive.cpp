@@ -1,10 +1,17 @@
-#include "../CPUOptimizer/offload_adam.hpp"
+#include "../CPUOptimizer/cpu_optimizer.hpp"
 
 // c++ benchmark_vs_naive.cpp -lm -O3 -march=native -fno-math-errno
 
 #define PARAM_COUNT 10000000
 
-static double test_impl(void step_fn(AdamOptimizer* optimizer, float* volatile params, float* volatile gradients), float** out_params) {
+typedef enum {
+    NAIVE = 0,
+    AVX512 = 1,
+} OptLevel;
+
+
+template<StepKind stepkind, OptLevel opt_level>
+static double test_impl(float** out_params) {
     float* params = (float*)malloc(PARAM_COUNT * sizeof(float));
     float* gradients = (float*)malloc(PARAM_COUNT * sizeof(float));
     if (params == NULL || gradients == NULL) {
@@ -24,20 +31,31 @@ static double test_impl(void step_fn(AdamOptimizer* optimizer, float* volatile p
     float epsilon = 1e-8f;
     float weight_decay = 0.0f;
     float clip_max_norm = 1.0f;
-    AdamOptimizer* optimizer = adam_init(PARAM_COUNT, learning_rate, beta1, beta2, epsilon, weight_decay, clip_max_norm);
+    CPUOptimizer* optimizer = cpu_optimizer_init(PARAM_COUNT, learning_rate, beta1, beta2, epsilon, weight_decay, clip_max_norm);
     
     // Time the optimization steps
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
     
-    for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
-        step_fn(optimizer, params, gradients);
+    if (opt_level == NAIVE) {
+        for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
+            float norm = l2_norm_naive(gradients, 0, PARAM_COUNT);
+            adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
+        }
+    } else if (opt_level == NAIVE) {
+        for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
+            float norm = l2_norm(gradients, 0, PARAM_COUNT);
+            adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
+        }
+    } else {
+        fprintf(stderr, "Invalid opt_level: %d\n", opt_level);
+        exit(1);
     }
     
     clock_gettime(CLOCK_MONOTONIC, &end);
     double time_taken = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
-    adam_free(optimizer);
+    cpu_optimizer_free(optimizer);
     free(optimizer);
     free(gradients);
     
@@ -56,33 +74,45 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
     printf("Results match between naive and %s!\n", impl_name);
 }
 
-int main(void) {
+template<StepKind stepkind>
+void run_test_for_kind() {
     float *params_naive, *params_avx2, *params_avx512;
-    double time_naive = test_impl(adam_step_naive<StepKind::ADAM_STEP>, &params_naive);
 
-    printf("\n\033[35m🦋 Benchmarking vectorized implementations vs naive C implementation.\033[0m\n\n");
-    printf("Naive Adam implementation: %.3f seconds\n\n", time_naive);
+    const char* stepkind_name;
+    if (stepkind == StepKind::ADAM_STEP) {
+        stepkind_name = "adam_step";
+    } else if (stepkind == StepKind::ADAMW_STEP) {
+        stepkind_name = "adamw_step";
+    } else if (stepkind == StepKind::ADAMW_TORCH_STEP) {
+        stepkind_name = "adamw_torch_step";
+    } else {
+        fprintf(stderr, "Invalid step kind: %d\n", stepkind);
+        exit(1);
+    }
+
+    double time_naive = test_impl<stepkind, OptLevel::NAIVE>(&params_naive);
+    printf("Naive %s implementation: %.3f seconds\n\n", stepkind_name, time_naive);
 
 #if defined(__AVX512F__)
-    double time_avx512 = test_impl(adam_step_avx512<StepKind::ADAM_STEP>, &params_avx512);
+    double time_avx512 = test_impl<stepkind, OptLevel::AVX512>(&params_avx512);
     verify_results(params_naive, params_avx512, "AVX-512");
-    printf("AVX-512 Adam implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n", 
-           time_avx512, time_naive/time_avx512);
+    printf("AVX-512 %s implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n",
+           stepkind_name, time_avx512, time_naive/time_avx512);
     free(params_avx512);
-#endif
-
-    // And now for adamw
-    time_naive = test_impl(adam_step_naive<StepKind::ADAMW_STEP>, &params_naive);
-    printf("Naive AdamW implementation: %.3f seconds\n\n", time_naive);
-
-#if defined(__AVX512F__)
-    time_avx512 = test_impl(adam_step_avx512<StepKind::ADAMW_STEP>, &params_avx512);
-    verify_results(params_naive, params_avx512, "AVX-512");
-    printf("AVX-512 AdamW implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n", 
-           time_avx512, time_naive/time_avx512);
-    free(params_avx512);
+#else
+    printf("\033[31mThis CPU does not support AVX-512, so no speedup can be measured.\033[0m\n\n");
 #endif
 
     free(params_naive);
+}
+
+int main(void) {
+    
+    printf("\n\033[35m🦋 Benchmarking vectorized implementations vs naive C implementation.\033[0m\n\n");
+    
+    run_test_for_kind<StepKind::ADAM_STEP>();
+    run_test_for_kind<StepKind::ADAMW_STEP>();
+    run_test_for_kind<StepKind::ADAMW_TORCH_STEP>();
+
     return 0;
 }

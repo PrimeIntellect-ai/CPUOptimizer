@@ -6,6 +6,17 @@ from torch.distributed.tensor import DTensor
 
 from . import bindings
 
+class StepKind:
+    ADAM = 0
+    ADAMW = 1
+    TORCH_ADAMW = 2
+
+_step_binding = {
+    StepKind.ADAM: bindings.step_adam,
+    StepKind.ADAMW: bindings.step_adamw,
+    StepKind.TORCH_ADAMW: bindings.step_adamw_torch,
+}
+
 class CPUOptimizer(torch.optim.Optimizer):
     """
     A CPU-optimized implementation of the Adam and AdamW optimizers.
@@ -20,7 +31,7 @@ class CPUOptimizer(torch.optim.Optimizer):
         weight_decay: float = 0.0,
         clip_max_norm: float = 0.0,
         pipeline_hook: Callable | None = None,
-        adamw: bool = False,
+        step_kind: StepKind = StepKind.TORCH_ADAMW,
     ):
         super().__init__(
             params,
@@ -32,7 +43,7 @@ class CPUOptimizer(torch.optim.Optimizer):
                 weight_decay=weight_decay,
                 clip_max_norm=clip_max_norm,
                 pipeline_hook=pipeline_hook,
-                adamw=adamw,
+                step_kind=step_kind,
             )
         )
 
@@ -58,20 +69,20 @@ class CPUOptimizer(torch.optim.Optimizer):
         """Perform an optimizer step on one parameter. This is done with whatever SIMD is available."""
 
         param_opt = self.state.get(param)
-        if type(param_opt) is not bindings.AdamOptimizer:
+        if type(param_opt) is not bindings.OptimizerBinding:
             raise ValueError(
                 f"Parameter is not registered with this optimizer: {param}"
             )
         
         local_param = param._local_tensor if isinstance(param, DTensor) else param
         local_grad = param.grad._local_tensor if isinstance(param, DTensor) else param.grad
-        step_fn = bindings.step_adamw if self.defaults["adamw"] else bindings.step_adam
+        step_fn = _step_binding[self.defaults["step_kind"]]
         step_fn(param_opt, local_param, local_grad)
 
     def __del__(self):
         """Free the memory held by C++. Otherwise we risk leaking unholy amounts of memory."""
         for opt in self.state.values():
-            if isinstance(opt, bindings.AdamOptimizer):
+            if isinstance(opt, bindings.OptimizerBinding):
                 bindings.destroy_optimizer(opt)
 
     def load_state_dict(self, state_dict: StateDict) -> None:

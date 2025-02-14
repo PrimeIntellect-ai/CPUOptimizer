@@ -4,8 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from sklearn.datasets import load_digits
 from sklearn.preprocessing import StandardScaler
-from CPUOptimizer import CPUOptimizer
-from torch.optim import Adam
+from CPUOptimizer import CPUOptimizer, StepKind
+from torch.optim import Adam, AdamW
 
 # pip install numpy torch scikit-learn
 
@@ -59,8 +59,8 @@ def main(use_adamw=False):
     # Create optimizers
     def pipeline_hook(param):
         cpu_opt.step_param(param)
-    cpu_opt = CPUOptimizer(model_cpu.parameters(), lr=lr, betas=betas, eps=eps, pipeline_hook=pipeline_hook, adamw=use_adamw)
-    torch_opt = Adam(model_torch.parameters(), lr=lr, betas=betas, eps=eps)
+    cpu_opt = CPUOptimizer(model_cpu.parameters(), lr=lr, betas=betas, eps=eps, pipeline_hook=pipeline_hook, step_kind = StepKind.TORCH_ADAMW if use_adamw else StepKind.ADAM)
+    torch_opt = Adam(model_torch.parameters(), lr=lr, betas=betas, eps=eps) if not use_adamw else AdamW(model_torch.parameters(), lr=lr, betas=betas, eps=eps)
     
     # Train both models
     max_diff = 0
