@@ -12,8 +12,6 @@
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
-// #define __AVX512F__ 1
-
 // TODO: Do fmadd consistently everywhere possible
 // TODO: Benchmark one_minus_beta2 * (g * g) vs (one_minus_beta2 * g) * g
 #define fmadd(a, b, c) __builtin_fmaf((a), (b), (c))
