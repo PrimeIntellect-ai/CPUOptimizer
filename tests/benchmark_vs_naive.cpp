@@ -158,7 +158,7 @@ void run_test_for_kind() {
     }
 
     double time_naive = test_impl<stepkind, OptLevel::NAIVE>(&params_naive);
-    printf("Naive %s implementation: %.3f seconds\n\n", stepkind_name, time_naive);
+    printf("Naive %s implementation: %.3f seconds\n", stepkind_name, time_naive);
 
 #if defined(__AVX512F__)
     double time_avx512 = test_impl<stepkind, OptLevel::AVX512>(&params_avx512);
