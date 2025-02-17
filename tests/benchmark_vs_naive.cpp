@@ -126,9 +126,6 @@ static float ultra_precise_average(float* array, size_t length) {
 
 void verify_results(float* baseline, float* test, const char* impl_name) {
     // Get an average and max deviation
-
-    
-
     float dev, max_dev = 0;
     float* deviations = (float*)malloc(PARAM_COUNT * sizeof(float));
     for (int i = 0; i < PARAM_COUNT; i++) {
@@ -140,6 +137,7 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
 
     printf("Max deviation: %f\n", max_dev);
     printf("Avg deviation: %f\n", avg_dev);
+    printf("\n");
     free(deviations);
 }
 
@@ -164,9 +162,10 @@ void run_test_for_kind() {
 
 #if defined(__AVX512F__)
     double time_avx512 = test_impl<stepkind, OptLevel::AVX512>(&params_avx512);
-    verify_results(params_naive, params_avx512, "AVX-512");
-    printf("AVX-512 %s implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n\n",
+    
+    printf("AVX-512 %s implementation: %.3f seconds \033[31m(%.2fx speedup)\033[0m\n",
            stepkind_name, time_avx512, time_naive/time_avx512);
+    verify_results(params_naive, params_avx512, "AVX-512");
     free(params_avx512);
 #else
     printf("\033[31mThis CPU does not support AVX-512, so no speedup can be measured.\033[0m\n\n");
