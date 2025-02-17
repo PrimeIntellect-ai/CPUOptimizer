@@ -233,7 +233,7 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
             // Apply parameter update
             // denom = (exp_avg_sq.sqrt() / bias_correction2_sqrt).add_(eps)
             float denom = sqrtf(v) * inv_one_minus_beta_2t_sqrt + eps;
-            // param.addcdiv_(exp_avg, denom, value=-step_s0ize)
+            // param.addcdiv_(exp_avg, denom, value=-step_size)
             param[i] = p - (m * step_size / denom);
         }
     }
