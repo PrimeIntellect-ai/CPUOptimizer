@@ -1,26 +1,29 @@
-#include <torch/extension.h>
-#include "cpu_optimizer.hpp"
-
 // Must install ninja to build this extension
 // Also install torch and numpy
 
-//////////////////////
-// Create / Destroy //
-//////////////////////
+#include <mutex>
+#include <thread>
+#include <torch/extension.h>
+#include "cpu_optimizer.hpp"
+#include "threadpool.hpp"
 
-#define STEP_CHECKS() \
-    TORCH_CHECK(optimizer != NULL, "optimizer must not be null"); \
-    TORCH_CHECK(param.is_contiguous(), "param must be contiguous"); \
-    TORCH_CHECK(grad.is_contiguous(), "grad must be contiguous"); \
-    TORCH_CHECK(param.dtype() == torch::kFloat32, "param must be float32"); \
-    TORCH_CHECK(grad.dtype() == torch::kFloat32, "grad must be float32"); \
-    TORCH_CHECK(param.sizes() == grad.sizes(), "param and grad must have same shape"); \
-    TORCH_CHECK((uint64_t)param.numel() == optimizer->param_count, "parameter count mismatch");
+ThreadPool* global_pool = NULL;
 
+void global_pool_init() {
+    if (global_pool == NULL) {
+        global_pool = new ThreadPool(std::thread::hardware_concurrency());
+    }
+}
 
-//////////
-// Adam //
-//////////
+template<StepKind stepkind>
+torch::Tensor step_async_binding(
+    CPUOptimizer* optimizer,
+    torch::Tensor& param,
+    torch::Tensor& grad
+) {
+
+}
+
 
 template<StepKind stepkind>
 torch::Tensor step_binding(
@@ -28,7 +31,15 @@ torch::Tensor step_binding(
     torch::Tensor& param,
     torch::Tensor& grad
 ) {
-    STEP_CHECKS()
+    TORCH_CHECK(optimizer != NULL, "optimizer must not be null");
+    TORCH_CHECK(param.is_contiguous(), "param must be contiguous");
+    TORCH_CHECK(grad.is_contiguous(), "grad must be contiguous");
+    TORCH_CHECK(param.dtype() == torch::kFloat32, "param must be float32");
+    TORCH_CHECK(grad.dtype() == torch::kFloat32, "grad must be float32");
+    TORCH_CHECK(param.sizes() == grad.sizes(), "param and grad must have same shape");
+    TORCH_CHECK((uint64_t)param.numel() == optimizer->param_count, "parameter count mismatch");
+    TORCH_CHECK((uint64_t)grad.numel() == optimizer->param_count, "gradient count mismatch");
+
     float* grad_ptr = grad.data_ptr<float>();
     float* param_ptr = param.data_ptr<float>();
     float grad_l2_norm = l2_norm(grad_ptr, 0, optimizer->param_count);
@@ -39,6 +50,7 @@ torch::Tensor step_binding(
 //////////////
 // Bindings //
 //////////////
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 

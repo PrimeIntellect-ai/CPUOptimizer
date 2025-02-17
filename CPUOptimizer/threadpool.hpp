@@ -48,9 +48,7 @@ class ThreadPool : public TaskThreadPoolBase {
 protected:
   struct task_element_t {
     bool run_with_id;
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     const std::function<void()> no_id;
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     const std::function<void(std::size_t)> with_id;
 
     explicit task_element_t(std::function<void()> f)

@@ -12,8 +12,12 @@
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
+// #define __AVX512F__ 1
+
 // TODO: Do fmadd consistently everywhere possible
-#define fmadd(a, b, c) __builtin_fma((a), (b), (c))
+// TODO: Benchmark one_minus_beta2 * (g * g) vs (one_minus_beta2 * g) * g
+#define fmadd(a, b, c) __builtin_fmaf((a), (b), (c))
+#define fmaddsub(a, b, c) __builtin_fmaf((a), (b), -(c))
 
 #define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
 
@@ -265,6 +269,7 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
 
     // Compute weight decay factor.
     float weight_decay_factor = (weight_decay != 0.0f) * weight_decay * (stepkind != StepKind::ADAM_STEP ? lr : 1);
+    float one_minus_wdf = 1.0f - weight_decay_factor;
 
     // Compute gradient clipping scale.
     float clip_grad_norm_scale = (max_norm != 0.0f) ? (max_norm / (grad_l2_norm + 0.000001f)) : 1;
@@ -280,6 +285,7 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
     __m512 lr_vec = _mm512_set1_ps(lr);
     __m512 eps_vec = _mm512_set1_ps(eps);
     __m512 weight_decay_vec = _mm512_set1_ps(weight_decay_factor);
+    __m512 one_minus_wdf_vec = _mm512_set1_ps(one_minus_wdf);
     __m512 clip_scale_vec = _mm512_set1_ps(clip_grad_norm_scale);
     __m512 step_size_vec = _mm512_set1_ps(step_size);
 
@@ -298,10 +304,9 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
         if constexpr (stepkind == StepKind::ADAM_STEP) {
             grad_vec = _mm512_fmadd_ps(weight_decay_vec, param_vec, grad_vec);
         } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
-            param_vec = _mm512_sub_ps(param_vec, _mm512_mul_ps(weight_decay_vec, param_vec));
+            param_vec = _mm512_fmaddsub_ps(weight_decay_vec, param_vec, param_vec);
         } else if constexpr (stepkind == StepKind::ADAMW_TORCH_STEP) {
-            __m512 one_minus_wd = _mm512_set1_ps(1.0f - weight_decay_factor);
-            param_vec = _mm512_mul_ps(param_vec, one_minus_wd);
+            param_vec = _mm512_mul_ps(param_vec, one_minus_wdf_vec);
         }
 
         if constexpr (stepkind == StepKind::ADAM_STEP || stepkind == StepKind::ADAMW_STEP) {
@@ -320,13 +325,13 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
             _mm512_storeu_ps(&param[i], _mm512_sub_ps(param_vec, update));
         } else if constexpr (stepkind == StepKind::ADAMW_TORCH_STEP) {
             // m = m_prev + (1 - beta1) * (grad - m_prev).
-            __m512 m_vec = _mm512_add_ps(m_prev_vec, _mm512_mul_ps(one_minus_beta1_vec, _mm512_sub_ps(grad_vec, m_prev_vec)));
+            __m512 m_vec = _mm512_fmadd_ps(one_minus_beta1_vec, _mm512_sub_ps(grad_vec, m_prev_vec), m_prev_vec);
             // v = beta2 * v_prev + (1 - beta2) * (grad * grad).
             __m512 v_vec = _mm512_fmadd_ps(beta2_vec, v_prev_vec, _mm512_mul_ps(one_minus_beta2_vec, _mm512_mul_ps(grad_vec, grad_vec)));
             _mm512_store_ps(&optimizer->m[i], m_vec);
             _mm512_store_ps(&optimizer->v[i], v_vec);
             // Parameter update.
-            __m512 denom = _mm512_add_ps(_mm512_mul_ps(_mm512_sqrt_ps(v_vec), inv_one_minus_beta_2t_sqrt_vec), eps_vec);
+            __m512 denom = _mm512_fmadd_ps(_mm512_sqrt_ps(v_vec), inv_one_minus_beta_2t_sqrt_vec, eps_vec);
             __m512 update = _mm512_div_ps(_mm512_mul_ps(m_vec, step_size_vec), denom);
             _mm512_storeu_ps(&param[i], _mm512_sub_ps(param_vec, update));
         }
@@ -342,16 +347,18 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
         g *= clip_grad_norm_scale;
 
         if constexpr (stepkind == StepKind::ADAM_STEP) {
-            g += weight_decay_factor * p;
+            g = fmadd(weight_decay_factor, p, g);
         } else if constexpr (stepkind == StepKind::ADAMW_STEP) {
-            p -= weight_decay_factor * p;
+            p = fmaddsub(weight_decay_factor, p, p);
         } else if constexpr (stepkind == StepKind::ADAMW_TORCH_STEP) {
-            p *= 1 - weight_decay_factor;
+            p *= one_minus_wdf;
         }
 
         if constexpr (stepkind == StepKind::ADAM_STEP || stepkind == StepKind::ADAMW_STEP) {
-            float m = beta1 * m_ + one_minus_beta1 * g;
-            float v = beta2 * v_ + one_minus_beta2 * g * g;
+            // float m = beta1 * m_ + one_minus_beta1 * g;
+            float m = fmadd(beta1, m_, (one_minus_beta1 * g));
+            // float v = beta2 * v_ + one_minus_beta2 * g * g; 
+            float v = fmadd(beta2, v_, (one_minus_beta2 * (g * g)));
             optimizer->m[i] = m;
             optimizer->v[i] = v;
 
@@ -359,12 +366,15 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
             float v_hat = v * inv_one_minus_beta2_t;
             param[i] = p - (lr * m_hat / (sqrtf(v_hat) + eps));
         } else if constexpr (stepkind == StepKind::ADAMW_TORCH_STEP) {
-            float m = m_ + one_minus_beta1 * (g - m_);
-            float v = beta2 * v_ + one_minus_beta2 * g * g;
+            // float m = m_ + one_minus_beta1 * (g - m_);
+            float m = fmadd(one_minus_beta1, (g - m_), m_);
+            // float v = beta2 * v_ + one_minus_beta2 * g * g;
+            float v = fmadd(beta2, v_, (one_minus_beta2 * (g * g)));
             optimizer->m[i] = m;
             optimizer->v[i] = v;
-            float denom = sqrtf(v) * inv_one_minus_beta_2t_sqrt + eps;
-            param[i] = p - (m * step_size / denom);
+
+            float denom = fmadd(sqrtf(v), inv_one_minus_beta_2t_sqrt, eps);
+            param[i] = p - ((m * step_size) / denom);
         }
     }
 }
