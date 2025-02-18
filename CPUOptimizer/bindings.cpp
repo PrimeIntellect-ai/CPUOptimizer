@@ -64,7 +64,7 @@ static void step_binding(
     if (optimizer->clip_max_norm != 0.0f)
         grad_l2_norm = sqrt(sum_squares(grad_ptr, 0, optimizer->param_count));
 
-    adam_step<stepkind>(optimizer, param_ptr, grad_ptr, 0, optimizer->param_count, (float)grad_l2_norm);
+    adam_step<stepkind>(optimizer, param_ptr, grad_ptr, 0, optimizer->param_count, grad_l2_norm);
 }
 
 template<StepKind stepkind>

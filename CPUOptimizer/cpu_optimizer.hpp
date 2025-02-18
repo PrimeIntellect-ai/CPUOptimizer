@@ -183,7 +183,7 @@ static double sum_squares(float* restrict vec, size_t start_idx, size_t end_idx)
 //////////
 
 template<StepKind stepkind>
-static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, float grad_l2_norm) {
+static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
     optimizer->t += 1;
     size_t t = optimizer->t;
     float lr = optimizer->lr;
@@ -204,7 +204,7 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
     float inv_one_minus_beta_2t_sqrt = 1.0f / sqrtf(one_minus_beta2_t);
     float step_size = lr * inv_one_minus_beta1_t;
     float weight_decay_factor = (weight_decay != 0.0f) * weight_decay * (stepkind != StepKind::ADAM_STEP ? lr : 1);
-    float clip_grad_norm_scale = (max_norm != 0.0f) ? (max_norm / (grad_l2_norm + 0.000001f)) : 1;
+    float clip_grad_norm_scale = (max_norm != 0.0f) ? (float)(max_norm / (grad_l2_norm + 0.000001f)) : 1;
 
     for(uint64_t i = start_idx; i < end_idx; i++) {
         float g = grad[i];
@@ -256,7 +256,7 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
 #if defined(__AVX512F__)
 #include <immintrin.h>
 template<StepKind stepkind>
-static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, float grad_l2_norm) {
+static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
     // Update time step and extract parameters.
     optimizer->t += 1;
     size_t t      = optimizer->t;
@@ -284,7 +284,7 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
     float one_minus_wdf = 1.0f - weight_decay_factor;
 
     // Compute gradient clipping scale.
-    float clip_grad_norm_scale = (max_norm != 0.0f) ? (max_norm / (grad_l2_norm + 0.000001f)) : 1;
+    float clip_grad_norm_scale = (max_norm != 0.0f) ? (float)(max_norm / (grad_l2_norm + 0.000001f)) : 1;
 
     // Broadcast constants.
     __m512 beta1_vec = _mm512_set1_ps(beta1);
@@ -393,7 +393,7 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
 #endif
 
 template<StepKind stepkind>
-static void adam_step(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, float grad_l2_norm) {
+static void adam_step(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
 #if !defined(__AVX512F__)
     adam_step_naive<stepkind>(optimizer, param, grad, start_idx, end_idx, grad_l2_norm);
 #else

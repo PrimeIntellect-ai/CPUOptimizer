@@ -47,7 +47,7 @@ static double test_impl(float** out_params) {
     } else if (opt_level == AVX512) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
             double norm = sqrt(sum_squares(gradients, 0, PARAM_COUNT));
-            adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, (float)norm);
+            adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
         }
     } else {
         fprintf(stderr, "Invalid opt_level: %d\n", opt_level);
