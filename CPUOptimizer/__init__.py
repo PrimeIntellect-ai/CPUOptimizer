@@ -61,24 +61,28 @@ class CPUOptimizer(torch.optim.Optimizer):
 
     def step(self) -> None:
         """Perform an optimizer step on all parameters."""
-
         if self.defaults["pipeline_hook"] is not None:
+            if hasattr(self, "step_ctx"):
+                del self.step_ctx # Calls the destructor, awaiting and joining the backing threadpool.
+            else:
+                raise RuntimeError("Pipeline hook was used, but could not find a step context. Call self.begin_step() before backwards().")
             return
-
-        step_ctx = self.begin_step()
 
         for group in self.param_groups:
             for p in group["params"]:
-                self.step_param(p, step_ctx=step_ctx)
+                self.step_param(p)
 
-        del step_ctx # Gets GC'd, calling the destructor and joining the backing threadpool.
-
-    def begin_step(self) -> bindings.StepContext | None:
+    def begin_step(self) -> None:
         """Create a step context for use with the pipeline hook. Delete the context to join the threadpool and complete the step."""
-        return bindings.create_step_context() if self.defaults["pipeline_hook"] is not None else None
+        if self.defaults["pipeline_hook"] is not None:
+            self.step_ctx = bindings.create_step_context()
 
-    def step_param(self, param: torch.Tensor, step_ctx: bindings.StepContext | None = None) -> None:
+    def step_param(self, param: torch.Tensor) -> None:
         """Perform an optimizer step on one parameter. This is done with whatever SIMD is available."""
+
+        step_ctx = getattr(self, "step_ctx", None)
+        if self.defaults["pipeline_hook"] is not None and step_ctx is None:
+            raise RuntimeError("Pipeline hook was used, but step context was not found. Call self.begin_step() before backwards().")
 
         param_opt = self.state.get(param)
         if type(param_opt) is not bindings.OptimizerBinding:
@@ -107,6 +111,9 @@ class CPUOptimizer(torch.optim.Optimizer):
 
     def state_dict(self) -> StateDict:
         """Serialize with torch.save()."""
+        if hasattr(self, "step_ctx"):
+            raise RuntimeError("Cannot save optimizer state while a step is in progress.")
+
         state = super().state_dict()
 
         # Convert optimizer state bindings to bytes objects

@@ -74,6 +74,9 @@ def main(use_adamw=False):
             # Zero gradients
             cpu_opt.zero_grad()
             torch_opt.zero_grad()
+
+            # Begin step
+            cpu_opt.begin_step()
             
             # Forward/backward pass
             output_cpu = model_cpu(data)

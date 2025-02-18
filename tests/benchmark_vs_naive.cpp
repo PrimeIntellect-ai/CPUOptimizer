@@ -1,5 +1,6 @@
 #include "../CPUOptimizer/cpu_optimizer.hpp"
 #include <algorithm>
+#include <cmath>
 
 // c++ benchmark_vs_naive.cpp -lm -O3 -march=native -fno-math-errno
 
@@ -40,13 +41,13 @@ static double test_impl(float** out_params) {
     
     if (opt_level == NAIVE) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
-            float norm = l2_norm_naive(gradients, 0, PARAM_COUNT);
-            adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
+            double norm = sqrt(sum_squares_naive(gradients, 0, PARAM_COUNT));
+            adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, (float)norm);
         }
     } else if (opt_level == AVX512) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
-            float norm = l2_norm(gradients, 0, PARAM_COUNT);
-            adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
+            double norm = sqrt(sum_squares(gradients, 0, PARAM_COUNT));
+            adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, (float)norm);
         }
     } else {
         fprintf(stderr, "Invalid opt_level: %d\n", opt_level);

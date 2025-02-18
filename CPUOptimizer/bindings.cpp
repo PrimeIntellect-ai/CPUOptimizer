@@ -5,29 +5,29 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
-#include <optional>
 #include <sched.h>
 #include <thread>
+#include <vector>
+
 #include <torch/extension.h>
 #include "cpu_optimizer.hpp"
 #include "threadpool.hpp"
 
 #define POOL_NUM_THREADS 16
 
-
 class StepContext {
   public:
     std::mutex running_lock;
-    size_t running_l2_norm;
     size_t running_param_count;
+    std::vector<double> running_sum_squares;
 
     cpuoptim::ThreadPool work_pool;
     cpuoptim::ThreadPool sched_pool;
 
     StepContext()
         : running_lock(),
-          running_l2_norm(0),
           running_param_count(0),
+          running_sum_squares((size_t)512),
           work_pool(POOL_NUM_THREADS), // Ordering does not matter here.
           sched_pool(1) // Enforce strict ordering with the queue.
           {}
@@ -60,11 +60,11 @@ static void step_binding(
     float* grad_ptr = grad.data_ptr<float>();
     float* param_ptr = param.data_ptr<float>();
 
-    float grad_l2_norm = 0.0f;
+    double grad_l2_norm = 0.0f;
     if (optimizer->clip_max_norm != 0.0f)
-        grad_l2_norm = l2_norm(grad_ptr, 0, optimizer->param_count);
+        grad_l2_norm = sqrt(sum_squares(grad_ptr, 0, optimizer->param_count));
 
-    adam_step<stepkind>(optimizer, param_ptr, grad_ptr, 0, optimizer->param_count, grad_l2_norm);
+    adam_step<stepkind>(optimizer, param_ptr, grad_ptr, 0, optimizer->param_count, (float)grad_l2_norm);
 }
 
 template<StepKind stepkind>
@@ -88,12 +88,12 @@ static void step_binding_async(
         size_t remainder = local_params % POOL_NUM_THREADS;
 
         // Launch the grad norms sharded across threads.
-        float global_norm = 0.0f;
+        double global_norm = 0.0f;
         if (optimizer->clip_max_norm != 0.0f) {
             std::mutex join_lock;
             size_t threads_launched = 0;
             size_t threads_finished = 0;
-            float shard_l2_norm_grads[POOL_NUM_THREADS];
+            float shard_sum_squares[POOL_NUM_THREADS];
             for (size_t i = 0; i < POOL_NUM_THREADS; i++) {
                 size_t start_idx = i * slice_size;
                 size_t end_idx = start_idx + slice_size;
@@ -101,8 +101,8 @@ static void step_binding_async(
                 if (start_idx >= end_idx) continue;
                 else threads_launched++;
 
-                work_pool->run([grad_ptr, param_ptr, start_idx, end_idx, i, &shard_l2_norm_grads, &join_lock, &threads_finished]() {
-                    shard_l2_norm_grads[i] = l2_norm(grad_ptr, start_idx, end_idx);
+                work_pool->run([grad_ptr, param_ptr, start_idx, end_idx, i, &shard_sum_squares, &join_lock, &threads_finished]() {
+                    shard_sum_squares[i] = sum_squares(grad_ptr, start_idx, end_idx);
                     join_lock.lock();
                     threads_finished++;
                     join_lock.unlock();
@@ -119,25 +119,22 @@ static void step_binding_async(
                 std::this_thread::yield();
             }
 
-            // Average the norms to get the local norm.
-            float local_norm = 0.0f;
+            // Combine the shard square sums to get the local norm.
+            double local_norm = 0.0f;
             for (size_t i = 0; i < threads_finished ; i++)
-                local_norm += shard_l2_norm_grads[i];
-            local_norm /= threads_finished;
+                local_norm += shard_sum_squares[i];
+            local_norm = sqrt(local_norm);
 
             // Calculate the global norm.
             step_context->running_lock.lock();
-            size_t total_params_processed = step_context->running_param_count + local_params;
-            float local_proportion = (float)local_params / (float)total_params_processed;
-            float global_proportion = 1.0f - local_proportion;
-            global_norm = local_norm * local_proportion + step_context->running_l2_norm * global_proportion;
-            step_context->running_l2_norm = global_norm;
-            step_context->running_param_count = total_params_processed;
-            step_context->running_lock.unlock();
+            step_context->running_param_count += local_params;
+            step_context->running_sum_squares.push_back(local_norm * local_norm);
 
-            printf("Local norm: %f\n", local_norm);
-            printf("Global norm: %f\n", global_norm);
-            printf("Processed %zu params\n", total_params_processed);
+            size_t vec_sz = step_context->running_sum_squares.size();
+            for (size_t i = 0; i < vec_sz; i++)
+                global_norm += step_context->running_sum_squares[i];
+            global_norm = sqrt(global_norm);
+            step_context->running_lock.unlock();
         }
 
         // Launch the optimizer step, sharded across threads.

@@ -129,38 +129,52 @@ static CPUOptimizer* cpu_optimizer_deserialize(const char* buffer) {
 // Norm //
 //////////
 
-static float l2_norm_naive(float* restrict vec, size_t start_idx, size_t end_idx) {
-    float sum = 0.0f;
-    for (size_t i = start_idx; i < end_idx; ++i)
-        sum += vec[i] * vec[i];
-    return sqrtf(sum);
+static double sum_squares_naive(float* restrict vec, size_t start_idx, size_t end_idx) {
+    double sum_sq = 0.0; // Accumulate in double
+    for (size_t i = start_idx; i < end_idx; ++i) {
+        double val = (double)vec[i];
+        sum_sq += val * val;
+    }
+    return sum_sq;
 }
 
 #if defined(__AVX512F__)
 #include <immintrin.h>
-static float l2_norm_avx512(float* restrict vec, size_t start_idx, size_t end_idx) {
-    __m512 vsum = _mm512_setzero_ps();
+static double sum_squares_avx512(float* restrict vec, size_t start_idx, size_t end_idx) {
+    __m512d vsum = _mm512_setzero_pd();  // Accumulate in double
 
     size_t i = start_idx;
     for (; i + 15 < end_idx; i += 16) {
-        __m512 v = _mm512_loadu_ps(vec + i);
-        vsum = _mm512_add_ps(vsum, _mm512_mul_ps(v, v));
+        // Load a vector of 16 floats, convert to 2 vectors of 8 doubles, square, sum, accumulate.
+        __m512 v_float = _mm512_loadu_ps(vec + i);
+        __m256 v_float_lo = _mm512_extractf32x8_ps(v_float, 0);
+        __m256 v_float_hi = _mm512_extractf32x8_ps(v_float, 1);
+        __m512d v_double_lo = _mm512_cvtps_pd(v_float_lo);
+        __m512d v_double_hi = _mm512_cvtps_pd(v_float_hi);
+        __m512d lo_squared = _mm512_mul_pd(v_double_lo, v_double_lo);
+        __m512d hi_squared = _mm512_mul_pd(v_double_hi, v_double_hi);
+        __m512d sum_16 = _mm512_add_pd(lo_squared, hi_squared);
+        vsum = _mm512_add_pd(vsum, sum_16);
     }
 
-    float sum = _mm512_reduce_add_ps(vsum);
+    // Sum the 8 doubles of the accumulator
+    double sum_sq = _mm512_reduce_add_pd(vsum);
 
     // Process any remaining elements
-    for (; i < end_idx; i++)
-        sum += vec[i] * vec[i];
-    return sqrtf(sum);
+    for (; i < end_idx; i++) {
+        double val = (double)vec[i];
+        sum_sq += val * val;
+    }
+
+    return sqrt(sum_sq);
 }
 #endif
 
-static float l2_norm(float* restrict vec, size_t start_idx, size_t end_idx) {
+static double sum_squares(float* restrict vec, size_t start_idx, size_t end_idx) {
 #if !defined(__AVX512F__)
-    return l2_norm_naive(vec, start_idx, end_idx);
+    return sum_squares_naive(vec, start_idx, end_idx);
 #else
-    return l2_norm_avx512(vec, start_idx, end_idx);
+    return sum_squares_avx512(vec, start_idx, end_idx);
 #endif
 }
 
