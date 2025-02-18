@@ -94,7 +94,7 @@ static void step_binding_async(
             std::mutex join_lock;
             size_t threads_launched = 0;
             size_t threads_finished = 0;
-            float shard_sum_squares[POOL_NUM_THREADS];
+            double shard_sum_squares[POOL_NUM_THREADS];
             for (size_t i = 0; i < POOL_NUM_THREADS; i++) {
                 size_t start_idx = i * slice_size;
                 size_t end_idx = start_idx + slice_size;
@@ -121,15 +121,13 @@ static void step_binding_async(
             }
 
             // Combine the shard square sums to get the local norm.
-            double local_norm = 0.0f;
-            for (size_t i = 0; i < threads_finished ; i++)
-                local_norm += shard_sum_squares[i];
-            local_norm = sqrt(local_norm);
+            double local_sum_sq = ultra_precise_sum(shard_sum_squares, threads_finished);
+            double local_norm = sqrt(local_sum_sq);
 
             // Calculate the global norm.
             step_context->running_lock.lock();
             step_context->running_param_count += local_params;
-            step_context->running_sum_squares.push_back(local_norm * local_norm);
+            step_context->running_sum_squares.push_back(local_sum_sq);
 
             size_t vec_sz = step_context->running_sum_squares.size();
             for (size_t i = 0; i < vec_sz; i++)

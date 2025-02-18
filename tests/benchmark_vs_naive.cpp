@@ -1,6 +1,7 @@
 #include "../CPUOptimizer/cpu_optimizer.hpp"
 #include <algorithm>
 #include <cmath>
+#include <threads.h>
 
 // c++ benchmark_vs_naive.cpp -lm -O3 -march=native -fno-math-errno
 
@@ -67,65 +68,6 @@ static double test_impl(float** out_params) {
     return time_taken;
 }
 
-#include <float.h>
-#ifdef __SIZEOF_FLOAT128__
-    typedef __float128 ultra_float;
-    #define ULTRA_FLOAT_AVAILABLE 1
-#else
-    typedef long double ultra_float;
-    #define ULTRA_FLOAT_AVAILABLE 0
-#endif
-
-// Comparison function for sorting
-static int compare_floats(const void* a, const void* b) {
-    float fa = *(const float*)a;
-    float fb = *(const float*)b;
-    if (fa < fb) return -1;
-    if (fa > fb) return 1;
-    return 0;
-}
-
-static float ultra_precise_average(float* array, size_t length) {
-    if (length == 0) return 0.0;
-    if (length == 1) return (ultra_float)array[0];
-    
-    // Step 1: Sort the array to group similar magnitudes
-    float* sorted = (float*)malloc(length * sizeof(float));
-    memcpy(sorted, array, length * sizeof(float));
-    qsort(sorted, length, sizeof(float), compare_floats);
-    
-    // Step 2: Pairwise summation with extended precision
-    size_t remaining = length;
-    ultra_float* temp = (ultra_float*)malloc(length * sizeof(ultra_float));
-    
-    // Convert to higher precision
-    for (size_t i = 0; i < length; i++) {
-        temp[i] = (ultra_float)sorted[i];
-    }
-    
-    // Perform pairwise summation
-    while (remaining > 1) {
-        size_t i;
-        for (i = 0; i < remaining / 2; i++) {
-            temp[i] = temp[2*i] + temp[2*i + 1];
-        }
-        if (remaining % 2) {
-            temp[i] = temp[remaining - 1];
-            remaining = i + 1;
-        } else {
-            remaining = i;
-        }
-    }
-    
-    ultra_float result = temp[0] / (ultra_float)length;
-    
-    // Cleanup
-    free(sorted);
-    free(temp);
-    
-    return (float)result;
-}
-
 void verify_results(float* baseline, float* test, const char* impl_name) {
     // Get an average and max deviation
     float dev, max_dev = 0;
@@ -135,7 +77,7 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
         if (dev > max_dev) max_dev = dev;        
     }
 
-    float avg_dev = ultra_precise_average(deviations, PARAM_COUNT);
+    float avg_dev = ultra_precise_sum(deviations, PARAM_COUNT);
 
     printf("Max deviation: %f\n", max_dev);
     printf("Avg deviation: %f\n", avg_dev);

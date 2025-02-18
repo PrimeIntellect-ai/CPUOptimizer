@@ -402,4 +402,63 @@ static void adam_step(CPUOptimizer* optimizer, float* restrict param, float* res
 #endif
 }
 
+#include <algorithm>
+#include <float.h>
+#ifdef __SIZEOF_FLOAT128__
+    typedef __Float128 ultra_float;
+    #define ULTRA_FLOAT_AVAILABLE 1
+#else
+    typedef long double ultra_float;
+    #define ULTRA_FLOAT_AVAILABLE 0
+#endif
+
+// Speed: Allocates and copies the array.
+template<typename arr_t>
+static inline ultra_float ultra_precise_sum(arr_t* array, size_t length) {
+    if (length == 0) return 0.0;
+    if (length == 1) return (ultra_float)array[0];
+
+    // Sort inplace
+    std::sort(array, array + length);
+
+    // Create an extended precision buffer
+    size_t remaining = length;
+    constexpr size_t static_sz = 4096 * 64;
+    size_t temp_sz = length * sizeof(ultra_float);
+    ultra_float* temp;
+    if (temp_sz <= static_sz) { // If the array is small, use the stack.
+        static ultra_float static_temp[static_sz / sizeof(ultra_float)];
+        temp = static_temp;
+    } else { // Otherwise, allocate.
+        temp = (ultra_float*)malloc(temp_sz);
+    }
+
+    // Copy
+    for (size_t i = 0; i < length; i++) {
+        temp[i] = (ultra_float)array[i];
+    }
+    
+    // Perform pairwise summation
+    while (remaining > 1) {
+        size_t i;
+        for (i = 0; i < remaining / 2; i++) {
+            temp[i] = temp[2*i] + temp[2*i + 1];
+        }
+        if (remaining % 2) {
+            temp[i] = temp[remaining - 1];
+            remaining = i + 1;
+        } else {
+            remaining = i;
+        }
+    }
+    
+    ultra_float result = temp[0] / (ultra_float)length;
+    
+    // Cleanup
+    if (temp_sz > static_sz)
+        free(temp);
+    
+    return result;
+}
+
 #endif /* CPU_OPTIMIZER_INCLUDE */
