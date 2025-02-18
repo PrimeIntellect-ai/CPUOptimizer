@@ -1,6 +1,8 @@
 from setuptools import setup, find_packages
 from torch.utils.cpp_extension import BuildExtension, CppExtension
 
+DEBUG = False
+
 setup(
     name='CPUOptimizer',
     version='0.1.0',
@@ -9,7 +11,7 @@ setup(
         CppExtension(
             'CPUOptimizer.bindings',
             ['CPUOptimizer/bindings.cpp'],
-            extra_compile_args=['-lm', '-O3', '-march=native', '-fno-math-errno'], # '-fsanitize=address', '-g', '-fno-omit-frame-pointer', '-fsanitize=undefined'
+            extra_compile_args=['-lm', '-O3', '-march=native', '-fno-math-errno',] + (['-g', '-fno-omit-frame-pointer',] if DEBUG else []),
         ),
     ],
     cmdclass={'build_ext': BuildExtension},

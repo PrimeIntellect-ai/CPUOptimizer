@@ -94,20 +94,26 @@ static void step_binding_async(
             std::mutex join_lock;
             size_t threads_launched = 0;
             size_t threads_finished = 0;
-            double shard_sum_squares[POOL_NUM_THREADS];
-            for (size_t i = 0; i < POOL_NUM_THREADS; i++) {
-                size_t start_idx = i * slice_size;
-                size_t end_idx = start_idx + slice_size;
-                if (i == POOL_NUM_THREADS - 1) end_idx += remainder;
-                if (start_idx >= end_idx) continue;
-                else threads_launched++;
 
-                work_pool->run([grad_ptr, param_ptr, start_idx, end_idx, i, &shard_sum_squares, &join_lock, &threads_finished]() {
-                    shard_sum_squares[i] = sum_squares(grad_ptr, start_idx, end_idx);
+            double shard_sum_squares[POOL_NUM_THREADS];
+            size_t work_idx = 0;
+            size_t thread_idx = 0;
+            while (work_idx < local_params) {
+                // Get the start and end indexes. Make sure the start is 64-byte aligned (16 floats).
+                size_t start_idx = work_idx;
+                work_idx = (work_idx + slice_size + 15) & ~15; // Round up to next alignment boundary
+                size_t end_idx = work_idx;
+                if (end_idx > local_params) end_idx = local_params;
+                if (start_idx >= end_idx) break;
+
+                threads_launched++;
+                work_pool->run([grad_ptr, param_ptr, start_idx, end_idx, thread_idx, &shard_sum_squares, &join_lock, &threads_finished]() {
+                    shard_sum_squares[thread_idx] = sum_squares(grad_ptr, start_idx, end_idx);
                     join_lock.lock();
                     threads_finished++;
                     join_lock.unlock();
                 });
+                thread_idx++;
             }
 
             // Wait for the completion of the local norm shards.
@@ -137,12 +143,16 @@ static void step_binding_async(
         }
 
         // Launch the optimizer step, sharded across threads.
-        optimizer->t += 1; // Increment the step counter before launching.
-        for (size_t i = 0; i < POOL_NUM_THREADS; i++) {
-            size_t start_idx = i * slice_size;
-            size_t end_idx = start_idx + slice_size;
-            if (i == POOL_NUM_THREADS - 1) end_idx += remainder;
-            if (start_idx >= end_idx) continue;
+        optimizer->t += 1; // Increment the step counter before launching. No sync here b/c pool of size 1.
+
+        size_t work_idx = 0;
+        while (work_idx < local_params) {
+            // Get the start and end indexes. Make sure the start is 64-byte aligned (16 floats).
+            size_t start_idx = work_idx;
+            work_idx = (work_idx + slice_size + 15) & ~15; // Round up to next alignment boundary
+            size_t end_idx = work_idx;
+            if (end_idx > local_params) end_idx = local_params;
+            if (start_idx >= end_idx) break;
 
             work_pool->run([=]() {
                 adam_step<stepkind>(optimizer, param_ptr, grad_ptr, start_idx, end_idx, global_norm);
