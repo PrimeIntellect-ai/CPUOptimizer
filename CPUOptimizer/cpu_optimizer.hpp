@@ -184,7 +184,8 @@ static double sum_squares(float* restrict vec, size_t start_idx, size_t end_idx)
 
 template<StepKind stepkind>
 static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
-    optimizer->t += 1;
+    // Incrementing the timestep must be done before this is called.
+
     size_t t = optimizer->t;
     float lr = optimizer->lr;
     float beta1 = optimizer->beta1;
@@ -257,8 +258,8 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
 #include <immintrin.h>
 template<StepKind stepkind>
 static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
-    // Update time step and extract parameters.
-    optimizer->t += 1;
+    // Incrementing the timestep must be done before this is called.
+
     size_t t      = optimizer->t;
     float lr      = optimizer->lr;
     float beta1   = optimizer->beta1;

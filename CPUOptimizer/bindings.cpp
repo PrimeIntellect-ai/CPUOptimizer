@@ -64,6 +64,7 @@ static void step_binding(
     if (optimizer->clip_max_norm != 0.0f)
         grad_l2_norm = sqrt(sum_squares(grad_ptr, 0, optimizer->param_count));
 
+    optimizer->t += 1;
     adam_step<stepkind>(optimizer, param_ptr, grad_ptr, 0, optimizer->param_count, grad_l2_norm);
 }
 
@@ -138,6 +139,7 @@ static void step_binding_async(
         }
 
         // Launch the optimizer step, sharded across threads.
+        optimizer->t += 1; // Increment the step counter before launching.
         for (size_t i = 0; i < POOL_NUM_THREADS; i++) {
             size_t start_idx = i * slice_size;
             size_t end_idx = start_idx + slice_size;

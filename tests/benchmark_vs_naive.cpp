@@ -41,11 +41,13 @@ static double test_impl(float** out_params) {
     
     if (opt_level == NAIVE) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
+            optimizer->t += 1;
             double norm = sqrt(sum_squares_naive(gradients, 0, PARAM_COUNT));
             adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, (float)norm);
         }
     } else if (opt_level == AVX512) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
+            optimizer->t += 1;
             double norm = sqrt(sum_squares(gradients, 0, PARAM_COUNT));
             adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
         }
