@@ -1,4 +1,5 @@
 from typing import Callable
+from enum import IntEnum
 
 import torch
 from torch.optim.optimizer import ParamsT, StateDict
@@ -6,7 +7,8 @@ from torch.distributed.tensor import DTensor
 
 from . import bindings
 
-class StepKind:
+
+class StepKind(IntEnum):
     ADAM = 0
     ADAMW = 1
     TORCH_ADAMW = 2
@@ -16,6 +18,7 @@ _step_binding = {
     StepKind.ADAMW: bindings.step_adamw,
     StepKind.TORCH_ADAMW: bindings.step_adamw_torch,
 }
+
 
 class CPUOptimizer(torch.optim.Optimizer):
     """
@@ -53,31 +56,38 @@ class CPUOptimizer(torch.optim.Optimizer):
                 self.state[param] = bindings.create_optimizer(
                     _param, lr, betas[0], betas[1], eps, weight_decay, clip_max_norm,
                 )
-                if pipeline_hook:
+                if pipeline_hook is not None:
                     param.register_post_accumulate_grad_hook(pipeline_hook)
 
     def step(self) -> None:
         """Perform an optimizer step on all parameters."""
+
         if self.defaults["pipeline_hook"] is not None:
             return
 
+        step_ctx = self.begin_step()
+
         for group in self.param_groups:
             for p in group["params"]:
-                self.step_param(p)
+                self.step_param(p, step_ctx=step_ctx)
 
-    def step_param(self, param: torch.Tensor) -> None:
+        del step_ctx # Gets GC'd, calling the destructor and joining the backing threadpool.
+
+    def begin_step(self) -> bindings.StepContext | None:
+        """Create a step context for use with the pipeline hook. Delete the context to join the threadpool and complete the step."""
+        return bindings.create_step_context() if self.defaults["pipeline_hook"] is not None else None
+
+    def step_param(self, param: torch.Tensor, step_ctx: bindings.StepContext | None = None) -> None:
         """Perform an optimizer step on one parameter. This is done with whatever SIMD is available."""
 
         param_opt = self.state.get(param)
         if type(param_opt) is not bindings.OptimizerBinding:
-            raise ValueError(
-                f"Parameter is not registered with this optimizer: {param}"
-            )
-        
+            raise ValueError(f"Parameter is not registered with this optimizer: {param}")
+
         local_param = param._local_tensor if isinstance(param, DTensor) else param
-        local_grad = param.grad._local_tensor if isinstance(param, DTensor) else param.grad
+        local_grad = param.grad._local_tensor if isinstance(param, DTensor) else param.grad # type: ignore (grad is a dtensor also)
         step_fn = _step_binding[self.defaults["step_kind"]]
-        step_fn(param_opt, local_param, local_grad)
+        step_fn(param_opt, local_param, local_grad, step_ctx)
 
     def __del__(self):
         """Free the memory held by C++. Otherwise we risk leaking unholy amounts of memory."""

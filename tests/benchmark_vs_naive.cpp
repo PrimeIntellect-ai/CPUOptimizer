@@ -66,7 +66,6 @@ static double test_impl(float** out_params) {
 
 #include <float.h>
 #ifdef __SIZEOF_FLOAT128__
-    #include <quadmath.h>
     typedef __float128 ultra_float;
     #define ULTRA_FLOAT_AVAILABLE 1
 #else
