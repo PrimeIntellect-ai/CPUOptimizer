@@ -13,6 +13,12 @@ class StepKind(IntEnum):
     ADAMW = 1
     TORCH_ADAMW = 2
 
+kind_name_map = {
+    "adam": StepKind.ADAM,
+    "adamw": StepKind.ADAMW,
+    "torch_adamw": StepKind.TORCH_ADAMW,
+}
+
 _step_binding = {
     StepKind.ADAM: bindings.step_adam,
     StepKind.ADAMW: bindings.step_adamw,
