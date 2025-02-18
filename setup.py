@@ -9,7 +9,7 @@ setup(
         CppExtension(
             'CPUOptimizer.bindings',
             ['CPUOptimizer/bindings.cpp'],
-            extra_compile_args=['-lm', '-O3', '-march=native', '-fno-math-errno'], # '-fsanitize=address', '-g', '-fno-omit-frame-pointer', '-fsanitize=undefined'
+            extra_compile_args=['-lm', '-O3', '-march=native', '-fno-math-errno', '-g', '-fno-omit-frame-pointer',]
         ),
     ],
     cmdclass={'build_ext': BuildExtension},
