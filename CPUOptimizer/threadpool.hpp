@@ -54,8 +54,6 @@ public:
   }
 
   ~ThreadPool() {
-    waitWorkComplete();
-
     {
       std::unique_lock<std::mutex> lock(mutex_);
       running_ = false;
