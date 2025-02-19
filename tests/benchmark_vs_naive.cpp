@@ -70,10 +70,10 @@ static double test_impl(float** out_params) {
 
 void verify_results(float* baseline, float* test, const char* impl_name) {
     // Get an average and max deviation
-    float dev, max_dev = 0;
+    float max_dev = 0;
     float* deviations = (float*)malloc(PARAM_COUNT * sizeof(float));
     for (int i = 0; i < PARAM_COUNT; i++) {
-        dev = deviations[i] = fabsf(baseline[i] - test[i]);
+        float dev = deviations[i] = fabsf(fabsf(baseline[i]) - fabsf(test[i]));
         if (dev > max_dev) max_dev = dev;        
     }
 
