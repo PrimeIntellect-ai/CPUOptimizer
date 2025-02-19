@@ -1,6 +1,7 @@
 // Must install ninja to build this extension
 // Also install torch and numpy
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -13,13 +14,22 @@
 #include "cpu_optimizer.hpp"
 #include "threadpool.hpp"
 
+#ifdef __SIZEOF_FLOAT128__
+#include <quadmath.h>
+typedef __float128 ultra_float;
+#define SQRTQ(x) sqrtq(x)
+#else
+typedef long double ultra_float;
+#define SQRTQ(x) sqrtl(x)
+#endif
+
 #define POOL_NUM_THREADS 16
 
 class StepContext {
   public:
     std::mutex running_lock;
     size_t running_param_count;
-    std::vector<double> running_sum_squares;
+    std::vector<long double> running_sum_squares;
 
     cpuoptim::ThreadPool work_pool;
     cpuoptim::ThreadPool sched_pool;
@@ -60,9 +70,9 @@ static void step_binding(
     float* grad_ptr = grad.data_ptr<float>();
     float* param_ptr = param.data_ptr<float>();
 
-    double grad_l2_norm = 0.0f;
+    long double grad_l2_norm = 0.0;
     if (optimizer->clip_max_norm != 0.0f)
-        grad_l2_norm = sqrt(sum_squares(grad_ptr, 0, optimizer->param_count));
+        grad_l2_norm = sqrtl(sum_squares(grad_ptr, 0, optimizer->param_count));
 
     optimizer->t += 1;
     adam_step<stepkind>(optimizer, param_ptr, grad_ptr, 0, optimizer->param_count, grad_l2_norm);
@@ -89,13 +99,13 @@ static void step_binding_async(
         size_t remainder = local_params % POOL_NUM_THREADS;
 
         // Launch the grad norms sharded across threads.
-        double global_norm = 0.0f;
+        long double global_norm = 0.0f;
         if (optimizer->clip_max_norm != 0.0f) {
             std::mutex join_lock;
             size_t threads_launched = 0;
             size_t threads_finished = 0;
 
-            double shard_sum_squares[POOL_NUM_THREADS];
+            long double shard_sum_squares[POOL_NUM_THREADS];
             size_t work_idx = 0;
             size_t thread_idx = 0;
             while (work_idx < local_params) {
@@ -127,18 +137,16 @@ static void step_binding_async(
             }
 
             // Combine the shard square sums to get the local norm.
-            double local_sum_sq = ultra_precise_sum(shard_sum_squares, threads_finished);
-            double local_norm = sqrt(local_sum_sq);
+            long double local_sum_sq = neumaier_sum(shard_sum_squares, threads_finished);
+            long double local_norm = sqrtl(local_sum_sq);
 
-            // Calculate the global norm.
+            // Calculate the global norm in maximal precision.
             step_context->running_lock.lock();
             step_context->running_param_count += local_params;
             step_context->running_sum_squares.push_back(local_sum_sq);
-
             size_t vec_sz = step_context->running_sum_squares.size();
-            for (size_t i = 0; i < vec_sz; i++)
-                global_norm += step_context->running_sum_squares[i];
-            global_norm = sqrt(global_norm);
+            long double global_norm = neumaier_sum(step_context->running_sum_squares.data(), vec_sz);
+            global_norm = (long double)SQRTQ((ultra_float)global_norm); // Clangd lies :)
             step_context->running_lock.unlock();
         }
 

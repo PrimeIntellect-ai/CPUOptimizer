@@ -1,7 +1,8 @@
 #ifndef CPU_OPTIMIZER_INCLUDE
 #define CPU_OPTIMIZER_INCLUDE
 
-#include <cstddef>
+#include <algorithm>
+#include <functional>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include <time.h>
 #include <string.h>
 #include <stddef.h>
+#include <float.h>
 
 // If we need to change the grad or optimizer state dtype, we shall rewrite.
 
@@ -19,6 +21,7 @@
 
 #define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
 
+
 typedef enum {
     ADAM_STEP = 0,
     ADAMW_STEP = 1,
@@ -26,13 +29,13 @@ typedef enum {
 } StepKind;
 
 typedef struct {
-#define SER_SIZE (6 * sizeof(float) + 2 * sizeof(uint64_t))
-    float beta1;
-    float beta2;
-    float lr;
-    float eps;
-    float weight_decay;
-    float clip_max_norm;
+#define SER_SIZE (6 * sizeof(double) + 2 * sizeof(uint64_t))
+    double beta1;
+    double beta2;
+    double lr;
+    double eps;
+    double weight_decay;
+    double clip_max_norm;
     uint64_t param_count;
     uint64_t t;
     void* m_base;      // Pointer to free for m
@@ -42,7 +45,7 @@ typedef struct {
 } CPUOptimizer;
 
 // Initialize the Adam optimizer
-static CPUOptimizer* cpu_optimizer_init(int param_count, float learning_rate, float beta1, float beta2, float eps, float weight_decay, float clip_max_norm) {
+static CPUOptimizer* cpu_optimizer_init(int param_count, double learning_rate, double beta1, double beta2, double eps, double weight_decay, double clip_max_norm) {
     // Allocate pointer to return
     CPUOptimizer* optimizer = (CPUOptimizer*)malloc(sizeof(CPUOptimizer));
     if (optimizer == NULL) {
@@ -125,11 +128,39 @@ static CPUOptimizer* cpu_optimizer_deserialize(const char* buffer) {
 }
 
 
+
+
 //////////
 // Norm //
 //////////
 
-static double sum_squares_naive(float* restrict vec, size_t start_idx, size_t end_idx) {
+template<bool squares = false, typename arr_t>
+static inline long double neumaier_sum(arr_t* array, size_t length) {
+    if (length == 0) return 0.0L;
+    // Neumaier method
+
+    // Sort the array in descending order
+    std::sort(array, array + length, std::greater<arr_t>());
+    
+    long double sum = squares ? 
+        static_cast<long double>(array[0]) * array[0] : 
+        static_cast<long double>(array[0]);
+    long double c = 0.0L;  // Running compensation for lost low-order bits
+    
+    for (size_t i = 1; i < length; i++) {
+        long double input = squares ? (long double)(array[i]) * (long double)(array[i])
+                                    : (long double)(array[i]);
+        long double t = sum + input;
+        long double sumabs = squares ? sum : std::abs(sum);
+        long double inputabs = squares ? input : std::abs(input);
+        c += (sumabs >= inputabs) ? ((sum - t) + input) : ((input - t) + sum);
+        sum = t;
+    }
+    
+    return sum + c;
+}
+
+static long double sum_squares_naive(float* restrict vec, size_t start_idx, size_t end_idx) {
     double sum_sq = 0.0; // Accumulate in double
     for (size_t i = start_idx; i < end_idx; ++i) {
         double val = (double)vec[i];
@@ -140,7 +171,7 @@ static double sum_squares_naive(float* restrict vec, size_t start_idx, size_t en
 
 #if defined(__AVX512F__)
 #include <immintrin.h>
-static double sum_squares_avx512(float* restrict vec, size_t start_idx, size_t end_idx) {
+static long double sum_squares_avx512(float* restrict vec, size_t start_idx, size_t end_idx) {
     __m512d vsum = _mm512_setzero_pd();  // Accumulate in double
 
     size_t i = start_idx;
@@ -157,20 +188,21 @@ static double sum_squares_avx512(float* restrict vec, size_t start_idx, size_t e
         vsum = _mm512_add_pd(vsum, sum_16);
     }
 
-    // Sum the 8 doubles of the accumulator
-    double sum_sq = _mm512_reduce_add_pd(vsum);
-
-    // Process any remaining elements
-    for (; i < end_idx; i++) {
+    // Create a new buffer to store the 8 double accumulators and the squares of any remaining elements.
+    double buffer[16] __attribute__((aligned(64)));
+    _mm512_store_pd(buffer, vsum);
+    for (size_t j = 0; i < end_idx; i++, j++) {
         double val = (double)vec[i];
-        sum_sq += val * val;
+        buffer[8 + j] = val * val;
     }
 
-    return sqrt(sum_sq);
+    long double sum_sq = neumaier_sum<false>(buffer, end_idx - start_idx);
+
+    return sum_sq;
 }
 #endif
 
-static double sum_squares(float* restrict vec, size_t start_idx, size_t end_idx) {
+static long double sum_squares(float* restrict vec, size_t start_idx, size_t end_idx) {
 #if !defined(__AVX512F__)
     return sum_squares_naive(vec, start_idx, end_idx);
 #else
@@ -183,7 +215,7 @@ static double sum_squares(float* restrict vec, size_t start_idx, size_t end_idx)
 //////////
 
 template<StepKind stepkind>
-static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
+static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, long double grad_l2_norm) {
     // Incrementing the timestep must be done before this is called.
 
     size_t t = optimizer->t;
@@ -191,21 +223,29 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
     float beta1 = optimizer->beta1;
     float beta2 = optimizer->beta2;
     float eps = optimizer->eps;
-    float weight_decay = optimizer->weight_decay;
-    float max_norm = optimizer->clip_max_norm;
 
-    float beta1_t = powf(beta1, t);
-    float beta2_t = powf(beta2, t);
-    float one_minus_beta1 = 1.0f - beta1;
-    float one_minus_beta2 = 1.0f - beta2;
-    float one_minus_beta1_t = 1.0f - beta1_t;
-    float one_minus_beta2_t = 1.0f - beta2_t;
-    float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
-    float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
-    float inv_one_minus_beta_2t_sqrt = 1.0f / sqrtf(one_minus_beta2_t);
-    float step_size = lr * inv_one_minus_beta1_t;
-    float weight_decay_factor = (weight_decay != 0.0f) * weight_decay * (stepkind != StepKind::ADAM_STEP ? lr : 1);
-    float clip_grad_norm_scale = (max_norm != 0.0f) ? (float)(max_norm / (grad_l2_norm + 0.000001f)) : 1;
+    float beta1_t_d = powl((long double)optimizer->beta1, t);
+    float beta2_t_d = powl((long double)optimizer->beta2, t);
+    float beta1_t = (float)beta1_t_d;
+    float beta2_t = (float)beta2_t_d;
+    double one_minus_beta1_d = 1.0 - optimizer->beta1;
+    double one_minus_beta2_d = 1.0 - optimizer->beta2;
+    float one_minus_beta1 = (float)one_minus_beta1_d;
+    float one_minus_beta2 = (float)one_minus_beta2_d;
+    double one_minus_beta1_t_d = 1.0f - beta1_t_d;
+    double one_minus_beta2_t_d = 1.0f - beta2_t_d;
+    float one_minus_beta1_t = (float)one_minus_beta1_t_d;
+    float one_minus_beta2_t = (float)one_minus_beta2_t_d;
+    double inv_one_minus_beta1_t_d = 1.0f / one_minus_beta1_t_d;
+    double inv_one_minus_beta2_t_d = 1.0f / one_minus_beta2_t_d;
+    float inv_one_minus_beta1_t = (float)inv_one_minus_beta1_t_d;
+    float inv_one_minus_beta2_t = (float)inv_one_minus_beta2_t_d;
+    float inv_one_minus_beta_2t_sqrt = (float)(1.0 / sqrtl((long double)one_minus_beta2_t_d));
+    float step_size = (float)(optimizer->lr * inv_one_minus_beta1_t_d);
+    double weight_decay_factor_d = (optimizer->weight_decay != 0.0) * optimizer->weight_decay * (stepkind != StepKind::ADAM_STEP ? lr : 1.0);
+    float weight_decay_factor = (float)weight_decay_factor_d;
+    float one_minus_wdf = (float)(1.0 - weight_decay_factor_d);
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0) ? (float)((long double)optimizer->clip_max_norm / (grad_l2_norm + 0.000001)) : 1.0f;
 
     for(uint64_t i = start_idx; i < end_idx; i++) {
         float g = grad[i];
@@ -257,35 +297,37 @@ static void adam_step_naive(CPUOptimizer* optimizer, float* restrict param, floa
 #if defined(__AVX512F__)
 #include <immintrin.h>
 template<StepKind stepkind>
-static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
+static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, long double grad_l2_norm) {
     // Incrementing the timestep must be done before this is called.
 
-    size_t t      = optimizer->t;
-    float lr      = optimizer->lr;
-    float beta1   = optimizer->beta1;
-    float beta2   = optimizer->beta2;
-    float eps     = optimizer->eps;
-    float weight_decay      = optimizer->weight_decay;
-    float max_norm= optimizer->clip_max_norm;
+    size_t t = optimizer->t;
+    float lr = optimizer->lr;
+    float beta1 = optimizer->beta1;
+    float beta2 = optimizer->beta2;
+    float eps = optimizer->eps;
 
-    // Compute bias correction factors.
-    float beta1_t  = powf(beta1, t);
-    float beta2_t  = powf(beta2, t);
-    float one_minus_beta1 = 1.0f - beta1;
-    float one_minus_beta2 = 1.0f - beta2;
-    float one_minus_beta1_t = 1.0f - beta1_t;
-    float one_minus_beta2_t = 1.0f - beta2_t;
-    float inv_one_minus_beta1_t = 1.0f / one_minus_beta1_t;
-    float inv_one_minus_beta2_t = 1.0f / one_minus_beta2_t;
-    float inv_one_minus_beta_2t_sqrt = 1.0f / sqrtf(one_minus_beta2_t);
-    float step_size = lr * inv_one_minus_beta1_t;
-
-    // Compute weight decay factor.
-    float weight_decay_factor = (weight_decay != 0.0f) * weight_decay * (stepkind != StepKind::ADAM_STEP ? lr : 1);
-    float one_minus_wdf = 1.0f - weight_decay_factor;
-
-    // Compute gradient clipping scale.
-    float clip_grad_norm_scale = (max_norm != 0.0f) ? (float)(max_norm / (grad_l2_norm + 0.000001f)) : 1;
+    float beta1_t_d = powl((long double)optimizer->beta1, t);
+    float beta2_t_d = powl((long double)optimizer->beta2, t);
+    float beta1_t = (float)beta1_t_d;
+    float beta2_t = (float)beta2_t_d;
+    double one_minus_beta1_d = 1.0 - optimizer->beta1;
+    double one_minus_beta2_d = 1.0 - optimizer->beta2;
+    float one_minus_beta1 = (float)one_minus_beta1_d;
+    float one_minus_beta2 = (float)one_minus_beta2_d;
+    double one_minus_beta1_t_d = 1.0f - beta1_t_d;
+    double one_minus_beta2_t_d = 1.0f - beta2_t_d;
+    float one_minus_beta1_t = (float)one_minus_beta1_t_d;
+    float one_minus_beta2_t = (float)one_minus_beta2_t_d;
+    double inv_one_minus_beta1_t_d = 1.0f / one_minus_beta1_t_d;
+    double inv_one_minus_beta2_t_d = 1.0f / one_minus_beta2_t_d;
+    float inv_one_minus_beta1_t = (float)inv_one_minus_beta1_t_d;
+    float inv_one_minus_beta2_t = (float)inv_one_minus_beta2_t_d;
+    float inv_one_minus_beta_2t_sqrt = (float)(1.0 / sqrtl((long double)one_minus_beta2_t_d));
+    float step_size = (float)(optimizer->lr * inv_one_minus_beta1_t_d);
+    double weight_decay_factor_d = (optimizer->weight_decay != 0.0) * optimizer->weight_decay * (stepkind != StepKind::ADAM_STEP ? lr : 1.0);
+    float weight_decay_factor = (float)weight_decay_factor_d;
+    float one_minus_wdf = (float)(1.0 - weight_decay_factor_d);
+    float clip_grad_norm_scale = (optimizer->clip_max_norm != 0.0) ? (float)((long double)optimizer->clip_max_norm / (grad_l2_norm + 0.000001)) : 1.0f;
 
     // Broadcast constants.
     __m512 beta1_vec = _mm512_set1_ps(beta1);
@@ -394,7 +436,7 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
 #endif
 
 template<StepKind stepkind>
-static void adam_step(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, double grad_l2_norm) {
+static void adam_step(CPUOptimizer* optimizer, float* restrict param, float* restrict grad, size_t start_idx, size_t end_idx, long double grad_l2_norm) {
 #if !defined(__AVX512F__)
     adam_step_naive<stepkind>(optimizer, param, grad, start_idx, end_idx, grad_l2_norm);
 #else
@@ -402,63 +444,5 @@ static void adam_step(CPUOptimizer* optimizer, float* restrict param, float* res
 #endif
 }
 
-#include <algorithm>
-#include <float.h>
-#ifdef __SIZEOF_FLOAT128__
-    typedef __Float128 ultra_float;
-    #define ULTRA_FLOAT_AVAILABLE 1
-#else
-    typedef long double ultra_float;
-    #define ULTRA_FLOAT_AVAILABLE 0
-#endif
-
-// Speed: Allocates and copies the array.
-template<typename arr_t>
-static inline ultra_float ultra_precise_sum(arr_t* array, size_t length) {
-    if (length == 0) return 0.0;
-    if (length == 1) return (ultra_float)array[0];
-
-    // Sort inplace
-    std::sort(array, array + length);
-
-    // Create an extended precision buffer
-    size_t remaining = length;
-    constexpr size_t static_sz = 4096 * 64;
-    size_t temp_sz = length * sizeof(ultra_float);
-    ultra_float* temp;
-    if (temp_sz <= static_sz) { // If the array is small, use the stack.
-        static ultra_float static_temp[static_sz / sizeof(ultra_float)];
-        temp = static_temp;
-    } else { // Otherwise, allocate.
-        temp = (ultra_float*)malloc(temp_sz);
-    }
-
-    // Copy
-    for (size_t i = 0; i < length; i++) {
-        temp[i] = (ultra_float)array[i];
-    }
-    
-    // Perform pairwise summation
-    while (remaining > 1) {
-        size_t i;
-        for (i = 0; i < remaining / 2; i++) {
-            temp[i] = temp[2*i] + temp[2*i + 1];
-        }
-        if (remaining % 2) {
-            temp[i] = temp[remaining - 1];
-            remaining = i + 1;
-        } else {
-            remaining = i;
-        }
-    }
-    
-    ultra_float result = temp[0] / (ultra_float)length;
-    
-    // Cleanup
-    if (temp_sz > static_sz)
-        free(temp);
-    
-    return result;
-}
 
 #endif /* CPU_OPTIMIZER_INCLUDE */
