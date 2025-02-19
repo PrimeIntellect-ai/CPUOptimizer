@@ -189,16 +189,16 @@ static long double sum_squares_avx512(float* restrict vec, size_t start_idx, siz
     }
 
     // Create a new buffer to store the 8 double accumulators and the squares of any remaining elements.
+    size_t bufsz = 8;
     double buffer[16] __attribute__((aligned(64)));
     _mm512_store_pd(buffer, vsum);
     for (size_t j = 0; i < end_idx; i++, j++) {
         double val = (double)vec[i];
         buffer[8 + j] = val * val;
+        bufsz++;
     }
 
-    long double sum_sq = neumaier_sum<false>(buffer, end_idx - start_idx);
-
-    return sum_sq;
+    return neumaier_sum<false>(buffer, bufsz);
 }
 #endif
 
