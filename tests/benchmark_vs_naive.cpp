@@ -77,7 +77,7 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
         if (dev > max_dev) max_dev = dev;        
     }
 
-    float avg_dev = (float)neumaier_sum(deviations, PARAM_COUNT);
+    float avg_dev = neumaier_sum(deviations, PARAM_COUNT) / PARAM_COUNT;
 
     printf("Max deviation: %f\n", max_dev);
     printf("Avg deviation: %f\n", avg_dev);
