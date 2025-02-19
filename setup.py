@@ -11,7 +11,9 @@ setup(
         CppExtension(
             'CPUOptimizer.bindings',
             ['CPUOptimizer/bindings.cpp'],
-            extra_compile_args=['-lm', '-O3', '-march=native', '-fno-math-errno',] + (['-g', '-fno-omit-frame-pointer',] if DEBUG else []),
+            extra_compile_args=['-O3', '-march=native', '-fno-math-errno', '-Wno-aggressive-loop-optimizations'] +
+                              (['-g', '-fno-omit-frame-pointer',] if DEBUG else []),
+            extra_link_args=['-lm', '-lquadmath'],
         ),
     ],
     cmdclass={'build_ext': BuildExtension},
