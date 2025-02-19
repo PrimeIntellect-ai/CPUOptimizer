@@ -43,13 +43,13 @@ static double test_impl(float** out_params) {
     if (opt_level == NAIVE) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
             optimizer->t += 1;
-            double norm = sqrt(sum_squares_naive(gradients, 0, PARAM_COUNT));
-            adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, (float)norm);
+            long double norm = sqrtl(sum_squares_naive(gradients, 0, PARAM_COUNT));
+            adam_step_naive<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
         }
     } else if (opt_level == AVX512) {
         for (int i = 0; i < 100; i++) {  // Increase iterations for better timing
             optimizer->t += 1;
-            double norm = sqrt(sum_squares(gradients, 0, PARAM_COUNT));
+            long double norm = sqrtl(sum_squares(gradients, 0, PARAM_COUNT));
             adam_step<stepkind>(optimizer, params, gradients, 0, PARAM_COUNT, norm);
         }
     } else {
@@ -77,7 +77,7 @@ void verify_results(float* baseline, float* test, const char* impl_name) {
         if (dev > max_dev) max_dev = dev;        
     }
 
-    float avg_dev = ultra_precise_sum(deviations, PARAM_COUNT);
+    float avg_dev = (float)neumaier_sum(deviations, PARAM_COUNT);
 
     printf("Max deviation: %f\n", max_dev);
     printf("Avg deviation: %f\n", avg_dev);
