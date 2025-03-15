@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Literal
 from enum import IntEnum
 
 import torch
@@ -8,21 +8,10 @@ from torch.distributed.tensor import DTensor
 from . import bindings
 
 
-class StepKind(IntEnum):
-    ADAM = 0
-    ADAMW = 1
-    TORCH_ADAMW = 2
-
-kind_name_map = {
-    "adam": StepKind.ADAM,
-    "adamw": StepKind.ADAMW,
-    "torch_adamw": StepKind.TORCH_ADAMW,
-}
-
 _step_binding = {
-    StepKind.ADAM: bindings.step_adam,
-    StepKind.ADAMW: bindings.step_adamw,
-    StepKind.TORCH_ADAMW: bindings.step_adamw_torch,
+    "adam": bindings.step_adam,
+    "adamw": bindings.step_adamw,
+    "torch_adamw": bindings.step_adamw_torch,
 }
 
 
@@ -40,7 +29,7 @@ class CPUOptimizer(torch.optim.Optimizer):
         weight_decay: float = 0.0,
         clip_max_norm: float = 0.0,
         pipeline_hook: Callable | None = None,
-        step_kind: StepKind = StepKind.TORCH_ADAMW,
+        step_kind: Literal["adam"] | Literal["adamw"] | Literal["torch_adamw"] = "torch_adamw",
     ):
         super().__init__(
             params,
