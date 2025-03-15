@@ -12,15 +12,16 @@
 #include <stddef.h>
 #include <float.h>
 
-// If we need to change the grad or optimizer state dtype, we shall rewrite.
+// NOTE: If we need to change the grad or optimizer state dtype, (for example for grads in bf16)
+// we shall add new functions. It's unfortunately not really possible to template for, and not
+// all CPUs we want to support have the BF16 AVX512 intrinsic extensions.
 
-// TODO: Do fmadd consistently everywhere possible
 // TODO: Benchmark one_minus_beta2 * (g * g) vs (one_minus_beta2 * g) * g
+
 #define fmadd(a, b, c) __builtin_fmaf((a), (b), (c))
 #define fmaddsub(a, b, c) __builtin_fmaf((a), (b), -(c))
 
 #define restrict __restrict__ // Restrict is a builtin in C, but not C++, so we define it to the compiler intrinsic
-
 
 typedef enum {
     ADAM_STEP = 0,
@@ -141,12 +142,12 @@ static inline long double neumaier_sum(arr_t* array, size_t length) {
 
     // Sort the array in descending order
     std::sort(array, array + length, std::greater<arr_t>());
-    
-    long double sum = squares ? 
-        static_cast<long double>(array[0]) * array[0] : 
+
+    long double sum = squares ?
+        static_cast<long double>(array[0]) * array[0] :
         static_cast<long double>(array[0]);
     long double c = 0.0L;  // Running compensation for lost low-order bits
-    
+
     for (size_t i = 1; i < length; i++) {
         long double input = squares ? (long double)(array[i]) * (long double)(array[i])
                                     : (long double)(array[i]);
@@ -156,7 +157,7 @@ static inline long double neumaier_sum(arr_t* array, size_t length) {
         c += (sumabs >= inputabs) ? ((sum - t) + input) : ((input - t) + sum);
         sum = t;
     }
-    
+
     return sum + c;
 }
 
@@ -412,7 +413,7 @@ static void adam_step_avx512(CPUOptimizer* optimizer, float* restrict param, flo
         if constexpr (stepkind == StepKind::ADAM_STEP || stepkind == StepKind::ADAMW_STEP) {
             // float m = beta1 * m_ + one_minus_beta1 * g;
             float m = fmadd(beta1, m_, (one_minus_beta1 * g));
-            // float v = beta2 * v_ + one_minus_beta2 * g * g; 
+            // float v = beta2 * v_ + one_minus_beta2 * g * g;
             float v = fmadd(beta2, v_, (one_minus_beta2 * (g * g)));
             optimizer->m[i] = m;
             optimizer->v[i] = v;
