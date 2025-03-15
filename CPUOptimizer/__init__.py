@@ -108,7 +108,7 @@ class CPUOptimizer(torch.optim.Optimizer):
     def __del__(self):
         """Free the optimizer state memory held by C++."""
         for opt in self.state.values():
-            if isinstance(opt, bindings.OptimizerBinding):
+            if type(opt).__name__ == "OptimizerBinding":
                 bindings.destroy_optimizer(opt)
 
     def load_state_dict(self, state_dict: StateDict) -> None:
