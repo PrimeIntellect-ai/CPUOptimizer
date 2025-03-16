@@ -17,6 +17,7 @@
 // all CPUs we want to support have the BF16 AVX512 intrinsic extensions.
 
 // TODO: Benchmark one_minus_beta2 * (g * g) vs (one_minus_beta2 * g) * g
+// TODO: Compare to https://github.com/pytorch/pytorch/pull/123074/files
 
 #define fmadd(a, b, c) __builtin_fmaf((a), (b), (c))
 #define fmaddsub(a, b, c) __builtin_fmaf((a), (b), -(c))
