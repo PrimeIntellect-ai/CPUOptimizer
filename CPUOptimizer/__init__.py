@@ -108,17 +108,11 @@ class CPUOptimizer(torch.optim.Optimizer):
     def __del__(self):
         """Free the optimizer state memory held by C++."""
         for opt in self.state.values():
-            if type(opt).__name__ == "OptimizerBinding":
+            # If you run into issues here, be sure to delete your optimizer early or define it inside a function,
+            # because in older python versions the order __del__ is called can get mixed up with module deinitialization.
+            # As this isn't an issue in our code, the best we can do is leave this comment.
+            if isinstance(opt, bindings.OptimizerBinding): # If broken, read comment above
                 bindings.destroy_optimizer(opt)
-
-    def load_state_dict(self, state_dict: StateDict) -> None:
-        super().load_state_dict(state_dict)
-
-        # Restore optimizer state bindings
-        for param, _bytes in self.state.items():
-            opt = bindings.deserialize(_bytes)
-            self.state[param] = opt
-            [setattr(opt, k, v) for k, v in self.defaults.items() if k in opt.__dir__()]
 
     def state_dict(self) -> StateDict:
         if hasattr(self, "step_ctx"):
@@ -126,11 +120,23 @@ class CPUOptimizer(torch.optim.Optimizer):
 
         state = super().state_dict()
 
-        # Convert optimizer state bindings to bytes objects
+        # Convert optimizer state bindings to (large) bytes objects
         for param, opt in state["state"].items():
             state["state"][param] = bindings.serialize(opt)
 
         return state
+
+    def load_state_dict(self, state_dict: StateDict) -> None:
+        if hasattr(self, "step_ctx"):
+            raise RuntimeError("Cannot load optimizer state while a step is in progress.")
+
+        super().load_state_dict(state_dict)
+
+        # Restore optimizer state bindings from bytes objects
+        for param, _bytes in self.state.items():
+            opt = bindings.deserialize(_bytes)
+            self.state[param] = opt
+            [setattr(opt, k, v) for k, v in self.defaults.items() if k in opt.__dir__()]
 
     @classmethod
     def vector_width(cls) -> int:
