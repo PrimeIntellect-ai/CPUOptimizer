@@ -5,7 +5,7 @@ from torchvision import datasets, transforms
 from CPUOptimizer import CPUOptimizer
 
 def train():
-    class SimpleNN(nn.Module):
+    class MNISTModel(nn.Module):
         def __init__(self):
             super(SimpleNN, self).__init__()
             self.fc1 = nn.Linear(784, 512)
@@ -13,29 +13,32 @@ def train():
             self.fc3 = nn.Linear(256, 10)
 
         def forward(self, x):
-            x = x.view(-1, 784)  # Flatten the input
+            x = x.view(-1, 784)
             x = F.relu(self.fc1(x))
             x = F.relu(self.fc2(x))
             x = self.fc3(x)
             return x
 
 
-    model = SimpleNN()
+    model = MNISTModel()
     loss_fn = nn.CrossEntropyLoss()
 
-    # Close over the optimizer before it's defined. This is legal python, and required.
+    # Close over the optimizer before it's defined.
+    # This is legal python, and is actually required.
     def pipeline_hook(param):
         optimizer.step_param(param)
 
-    # Arguments are exactly the same as torch.optim.Adam/AdamW.
+    # Arguments are the same as torch.optim.Adam/AdamW.
+    # Torch's AdamW implementation is substantially different from the original paper,
+    # while Adam is the same. We have implemented all of them.
     optimizer = CPUOptimizer(
         model.parameters(),
-        step_kind="torch_adamw",      # Or "adam" or "adamw"
+        step_kind="torch_adamw",      # Or "adam" or "adamw".
         lr=4e-6,
         betas=(0.9, 0.95),
         eps=1e-8,
         weight_decay=0.0,
-        pipeline_hook=pipeline_hook,  # Or None for a drop-in replacement for Adam without pipelining
+        pipeline_hook=pipeline_hook,  # Or None for a drop-in replacement for Adam without pipelining.
     )
 
     num_epochs = 50
@@ -49,20 +52,17 @@ def train():
 
             # Calculate loss as normal
             loss = loss_fn(outputs, labels)
-
+x
             # If you defined a pipeline hook, call this extra method before backward().
-            # Otherwise, you don't have to.
+            # If you didn't define one, you don't have to call this (but you still can).
             optimizer.begin_step()
 
-            # Call backward() as normal.
             # With a pipeline hook, as grads become available during backward() the optimizer step runs asynchronously on CPU.
             # Overlapping the optimizer step with backward() in this way leads to large speed improvements.
             # If you didn't define a pipeline hook, no changes.
             loss.backward()
 
-            # Call step() and zero_grad() as normal.
-            # If you're using a pipeline hook, the step() function doesn't do the optimizer step,
-            # instead it waits until the hooks launched during backward() are complete.
+            # If you're using a pipeline hook, the step() function waits for the async optimizer step queued by backward() to finish.
             # If you aren't using a pipeline hook, optimizer.step() behaves as normal.
             optimizer.step()
 
