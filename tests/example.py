@@ -7,7 +7,7 @@ from CPUOptimizer import CPUOptimizer
 def train():
     class MNISTModel(nn.Module):
         def __init__(self):
-            super(SimpleNN, self).__init__()
+            super(MNISTModel, self).__init__()
             self.fc1 = nn.Linear(784, 512)
             self.fc2 = nn.Linear(512, 256)
             self.fc3 = nn.Linear(256, 10)
@@ -52,7 +52,7 @@ def train():
 
             # Calculate loss as normal
             loss = loss_fn(outputs, labels)
-x
+
             # If you defined a pipeline hook, call this extra method before backward().
             # If you didn't define one, you don't have to call this (but you still can).
             optimizer.begin_step()
